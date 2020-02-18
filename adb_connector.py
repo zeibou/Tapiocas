@@ -5,11 +5,10 @@ import re
 import tempfile
 from PIL import Image
 
-
 from adb_shell.adb_device import AdbDeviceTcp
 from adb_shell.auth.sign_pythonrsa import PythonRSASigner
 
-
+from constants import *
 
 
 # useful terminal commands:
@@ -167,7 +166,7 @@ class AdbConnector:
         :return:
         """
         self._connect()
-        self._shell(f'input tap {x:.0f} {y:.0f}')
+        self._shell(f'{CMD_SHELL_TAP} {x:.0f} {y:.0f}')
         self.wait(wait_ms)
 
     def press(self, x, y, time_ms = 0, wait_ms = 0):
@@ -180,7 +179,7 @@ class AdbConnector:
         :return:
         """
         self._connect()
-        self._shell(f'input swipe {x:.0f} {y:.0f} {x:.0f} {y:.0f} {time_ms}')
+        self._shell(f'{CMD_SHELL_SWIPE} {x:.0f} {y:.0f} {x:.0f} {y:.0f} {time_ms}')
         self.wait(wait_ms)
 
     def swipe(self, x1, y1, x2, y2, time_ms = 0, wait_ms = 0):
@@ -199,7 +198,7 @@ class AdbConnector:
         """
         self._connect()
         print(x1, y1, x2, y2)
-        self._shell(f'input swipe {x1:.0f} {y1:.0f} {x2:.0f} {y2:.0f} {time_ms}')
+        self._shell(f'{CMD_SHELL_SWIPE} {x1:.0f} {y1:.0f} {x2:.0f} {y2:.0f} {time_ms}')
         self.wait(wait_ms)
 
     @staticmethod
@@ -232,26 +231,26 @@ class AdbConnector:
     # too much info: debug only
     def print_all_process_info(self):
         self._connect()
-        processes_with_focus = self._shell("dumpsys window windows")
+        processes_with_focus = self._shell(CMD_WINDOWS_DUMP)
         print(processes_with_focus)
 
     # todo: does not work anymore with latest android versions?
     @DeprecationWarning
     def process_has_focus(self, process_name):
         self._connect()
-        all_processes = self._shell(f"dumpsys window windows | grep -i {process_name} | grep -i mcurrentfocus")
+        all_processes = self._shell(f"{CMD_WINDOWS_DUMP} | grep -i {process_name} | grep -i mcurrentfocus")
         return len(all_processes) > 0
 
     # todo: needs PR merged in adb_shell module
     def listen(self):
         self._connect()
-        for line in self._device.streaming_shell("getevent -lt"):
+        for line in self._device.streaming_shell(CMD_GET_EVENT):
             print(line)
 
     def _get_screen_resolution(self):
         if not self._device_resolution:
             self._connect()
-            header_width_x_height = self._shell("wm size")
+            header_width_x_height = self._shell(CMD_WM_SIZE)
             self._device_resolution = tuple(map(int, re.findall("\d+", header_width_x_height)))
         return self._device_resolution
 
@@ -270,20 +269,29 @@ class AdbConnector:
             raise Exception("Not implemented")
         return self._get_screenshot_png_stream()
 
+    @staticmethod
+    def get_temp_remote_filepath(extension):
+        random_part = next(tempfile._get_candidate_names())
+        return os.path.join(REMOTE_SCREENSHOT_DIRECTORY, f"screenshot_adb_{random_part}.{extension}")
+
+    @staticmethod
+    def get_temp_local_filepath(extension):
+        return os.path.realpath(f"screenshot.{extension}")
+
     def _get_screenshot_png_pull_file(self) -> Image:
         self._connect()
-        png_remote_filepath = f"/sdcard/screenshot_adb_{next(tempfile._get_candidate_names())}.png"
-        png_local_filepath = os.path.realpath("adb_screenshot.png")
-        self._shell(f"screencap -p {png_remote_filepath}")
+        png_remote_filepath = self.get_temp_remote_filepath("png")
+        png_local_filepath = self.get_temp_local_filepath("png")
+        self._shell(f"{CMD_SCREENSHOT_PNG} {png_remote_filepath}")
         self._pull(png_remote_filepath, png_local_filepath)
         self._shell(f"rm {png_remote_filepath}")
         return Image.open(png_local_filepath)
 
     def _get_screenshot_raw_pull_file(self) -> Image:
         self._connect()
-        raw_remote_filepath = f"/sdcard/screenshot_adb_{next(tempfile._get_candidate_names())}.raw"
-        raw_local_filepath = os.path.realpath("adb_screenshot.raw")
-        self._shell(f"screencap {raw_remote_filepath}")
+        raw_remote_filepath = self.get_temp_remote_filepath("raw")
+        raw_local_filepath = self.get_temp_local_filepath("raw")
+        self._shell(f"{CMD_SCREENSHOT_RAW} {raw_remote_filepath}")
         self._pull(raw_remote_filepath, raw_local_filepath)
         self._shell(f"rm {raw_remote_filepath}")
         with open(raw_local_filepath, 'rb') as f:
@@ -293,7 +301,7 @@ class AdbConnector:
     # todo: use exec-out instead of shell
     def _get_screenshot_png_stream(self) -> Image:
         self._connect()
-        raw = self._shell("screencap -p", decode=False)
+        raw = self._shell(CMD_SCREENSHOT_PNG, decode=False)
         image = Image.open(io.BytesIO(raw))
         return image
 
