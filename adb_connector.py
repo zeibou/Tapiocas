@@ -4,6 +4,7 @@ import time
 import re
 import tempfile
 from PIL import Image
+import argparse
 
 from adb_shell.adb_device import AdbDeviceTcp
 from adb_shell.auth.sign_pythonrsa import PythonRSASigner
@@ -22,7 +23,7 @@ from constants import *
 ##   adb shell -- getevent -lt;
 
 # Then press the phone's screen and get data like:
-# [ 1059536.835861] /dev/input/event2: EV_KEY       BTN_TOUCH            DOWN                
+# [ 1059536.835861] /dev/input/event2: EV_KEY       BTN_TOUCH            DOWN
 # [ 1059536.835861] /dev/input/event2: EV_ABS       ABS_MT_TRACKING_ID   0000eb79            
 # [ 1059536.835861] /dev/input/event2: EV_ABS       ABS_MT_POSITION_X    00000213            
 # [ 1059536.835861] /dev/input/event2: EV_ABS       ABS_MT_POSITION_Y    00000420 
@@ -318,7 +319,10 @@ def timeit(method, n, *args):
 
 
 if __name__ == "__main__":
-    connector = AdbConnector(ip='192.168.1.186', verbose=True)
+    parser = argparse.ArgumentParser(description='Android bot')
+    parser.add_argument("--phone_ip", "-i", type=str, required=True, help='Ip of your phone')
+    argument = parser.parse_args()
+    connector = AdbConnector(ip=argument.phone_ip, verbose=True)
 
 
     connector.tap(1000, 2000)
