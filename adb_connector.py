@@ -10,7 +10,12 @@ from adb_shell.adb_device import AdbDeviceTcp
 from adb_shell.auth.sign_pythonrsa import PythonRSASigner
 
 from constants import *
+import logging
+import log_manager
+import json
+from datetime import datetime
 
+logger = logging.getLogger(__name__)
 
 # useful terminal commands:
 # connect to phone via usb:
@@ -100,12 +105,11 @@ class AdbConnector:
     """
     wraps adb_shell functions for simpler automation
     """
-    def __init__(self, ip=None, need_auth=True, device_name="", auto_reconnect_seconds=60, verbose=False):
+    def __init__(self, ip=None, need_auth=True, device_name="", auto_reconnect_seconds=60):
         self.ip = ip
         self.device_name = device_name
         self.need_auth = need_auth
         self.auto_reconnect_seconds = auto_reconnect_seconds
-        self.verbose=verbose
 
         self._event_handler = AdbConnectorEventManager()
         self._last_connected_time = time.time()
@@ -126,8 +130,7 @@ class AdbConnector:
             return
 
 
-        if self.verbose:
-            print(f">>> connecting to {self.ip}")
+        logger.debug(f"connecting to {self.ip}")
         self._last_connected_time = now
         self._device = AdbDeviceTcp(self.ip, default_timeout_s=self.auto_reconnect_seconds)
         if not self.need_auth:
@@ -138,23 +141,19 @@ class AdbConnector:
             signer = PythonRSASigner('', private_key)
             self._device.connect(rsa_keys=[signer], auth_timeout_s=0.1)
 
-        if self.verbose:
-            print(f">>> connected")
+        logger.debug(f"connected")
 
     def _disconnect(self):
         self._device.close()
         self._device = None
-        if self.verbose:
-            print(">>> disconnected")
+        logger.debug("disconnected")
 
     def _shell(self, command, **kwargs):
-        if self.verbose:
-            print(f">>> shell {command}")
+        logger.debug(f"shell {command}")
         return self._device.shell(command, **kwargs)
 
     def _pull(self, from_file, to_file):
-        if self.verbose:
-            print(f">>> pull {from_file} to {to_file}")
+        logger.debug(f"pull {from_file} to {to_file}")
         return self._device.pull(from_file, to_file)
 
 
@@ -198,7 +197,7 @@ class AdbConnector:
         :return:
         """
         self._connect()
-        print(x1, y1, x2, y2)
+        logger.debug(x1, y1, x2, y2)
         self._shell(f'{CMD_SHELL_SWIPE} {x1:.0f} {y1:.0f} {x2:.0f} {y2:.0f} {time_ms}')
         self.wait(wait_ms)
 
@@ -233,7 +232,7 @@ class AdbConnector:
     def print_all_process_info(self):
         self._connect()
         processes_with_focus = self._shell(CMD_WINDOWS_DUMP)
-        print(processes_with_focus)
+        logger.debug(processes_with_focus)
 
     # todo: does not work anymore with latest android versions?
     @DeprecationWarning
@@ -246,7 +245,7 @@ class AdbConnector:
     def listen(self):
         self._connect()
         for line in self._device.streaming_shell(CMD_GET_EVENT):
-            print(line)
+            logger.debug(line)
 
     def _get_screen_resolution(self):
         if not self._device_resolution:
@@ -310,28 +309,45 @@ class AdbConnector:
 
 
 def get_pixel(image, x, y):
-    print(image.getpixel((x, y)))
+    logger.debug(image.getpixel((x, y)))
 
 def timeit(method, n, *args):
     t = time.time()
     for _ in range(n):
         method(*args)
 
-    print(time.time() - t)
+    logger.debug(time.time() - t)
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Android bot')
     parser.add_argument("--phone_ip", "-i", type=str, required=True, help='Ip of your phone')
+    parser.add_argument("--config_file", "-c", type=str, help='Config file',
+                        default="./config/adbc.json")
     argument = parser.parse_args()
-    connector = AdbConnector(ip=argument.phone_ip, verbose=True)
+
+    if not os.path.exists(argument.config_file):
+        raise FileNotFoundError(f"No file found at [{argument.config_file}]")
+    with open(argument.config_file, "r") as fin:
+        config = json.load(fin)
+    log_folder = config["log_dir"]
+    log_manager.initialize_log(log_folder)
+
+    logger = logging.getLogger(__name__)
+    logger.info('Starting adb connector')
+    logger.info('Pid is {0}'.format(os.getpid()))
+    logger.info('Log folder {0}'.format(log_folder))
+    logger.info('Today is {0}'.format(str(datetime.today())))
+
+    connector = AdbConnector(ip=argument.phone_ip)
+
 
 
     connector.tap(1000, 2000)
     #connector.listen()
     width = connector.screen_width()
     height = connector.screen_height()
-    print(width, height)
+    logger.debug(width, height)
     #connector.print_all_process_info()
 
     timeit(connector.get_screenshot, 2, True, True)
