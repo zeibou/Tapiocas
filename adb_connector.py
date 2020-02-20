@@ -277,7 +277,9 @@ class AdbConnector:
 
     @staticmethod
     def get_temp_local_filepath(extension):
-        return os.path.realpath(f"screenshot.{extension}")
+        if not os.path.exists(OUTPUT_DIR):
+            os.mkdir(OUTPUT_DIR)
+        return os.path.realpath(f"{OUTPUT_DIR}/screenshot.{extension}")
 
     def _get_screenshot_png_pull_file(self) -> Image:
         self._connect()

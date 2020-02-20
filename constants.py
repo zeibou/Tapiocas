@@ -9,3 +9,4 @@ CMD_GET_EVENT = "getevent -lt"
 CMD_WM_SIZE = "wm size"
 
 REMOTE_SCREENSHOT_DIRECTORY = "/sdcard"
+OUTPUT_DIR = "output"
