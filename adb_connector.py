@@ -319,16 +319,10 @@ def timeit(method, n, *args):
     logger.debug(time.time() - t)
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Android bot')
-    parser.add_argument("--phone_ip", "-i", type=str, required=True, help='Ip of your phone')
-    parser.add_argument("--config_file", "-c", type=str, help='Config file',
-                        default="./config/adbc.json")
-    argument = parser.parse_args()
-
-    if not os.path.exists(argument.config_file):
-        raise FileNotFoundError(f"No file found at [{argument.config_file}]")
-    with open(argument.config_file, "r") as fin:
+def run(phone_ip, config_file):
+    if not os.path.exists(config_file):
+        raise FileNotFoundError(f"No file found at [{config_file}]")
+    with open(config_file, "r") as fin:
         config = json.load(fin)
     log_folder = config["log_dir"]
     log_manager.initialize_log(log_folder)
@@ -339,30 +333,34 @@ if __name__ == "__main__":
     logger.info('Log folder {0}'.format(log_folder))
     logger.info('Today is {0}'.format(str(datetime.today())))
 
-    connector = AdbConnector(ip=argument.phone_ip)
-
-
+    connector = AdbConnector(ip=phone_ip)
 
     connector.tap(1000, 2000)
-    #connector.listen()
+    # connector.listen()
     width = connector.screen_width()
     height = connector.screen_height()
     logger.debug(width, height)
-    #connector.print_all_process_info()
+    # connector.print_all_process_info()
 
     timeit(connector.get_screenshot, 2, True, True)
     timeit(connector.get_screenshot, 2, False, True)
     timeit(connector.get_screenshot, 2, False, False)
 
 
-    #print(image.getpixel((100, 100)))
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='Android bot')
+    parser.add_argument("--phone_ip", "-i", type=str, required=True, help='Ip of your phone')
+    parser.add_argument("--config_file", "-c", type=str, help='Config file',
+                        default="./config/adbc.json")
+    argument = parser.parse_args()
+    run(argument.phone_ip, argument.config_file)
 
-    #connector.listen(timeout_ms=10_000)
+    # print(image.getpixel((100, 100)))
+
+    # connector.listen(timeout_ms=10_000)
 
     # connector.event_press(0, 500, 500)
     # connector.event_flush()
     # connector.wait(3000)
     # connector.event_release(0)
     # connector.event_flush()
-
-
