@@ -16,6 +16,8 @@ import json
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
+logging.getLogger('adb_shell').setLevel(logging.INFO)
+logging.getLogger('PIL').setLevel(logging.INFO)
 
 # useful terminal commands:
 # connect to phone via usb:
@@ -312,14 +314,15 @@ def get_pixel(image, x, y):
     logger.debug(image.getpixel((x, y)))
 
 def timeit(method, n, *args):
+    logger.info(f"Running {method}")
     t = time.time()
     for _ in range(n):
         method(*args)
 
-    logger.debug(time.time() - t)
+    logger.info(time.time() - t)
 
 
-def run(phone_ip, config_file):
+def run(phone_ip, config_file, log_level):
     if not os.path.exists(config_file):
         raise FileNotFoundError(f"No file found at [{config_file}]")
     with open(config_file, "r") as fin:
@@ -328,22 +331,27 @@ def run(phone_ip, config_file):
     log_manager.initialize_log(log_folder)
 
     logger = logging.getLogger(__name__)
+    logger.setLevel(log_level)
     logger.info('Starting adb connector')
     logger.info('Pid is {0}'.format(os.getpid()))
     logger.info('Log folder {0}'.format(log_folder))
     logger.info('Today is {0}'.format(str(datetime.today())))
 
+
+
     connector = AdbConnector(ip=phone_ip)
+    width = connector.screen_width()
+    height = connector.screen_height()
+    logger.debug(f"Screen is {width}x{height}")
+
 
     connector.tap(1000, 2000)
     # connector.listen()
-    width = connector.screen_width()
-    height = connector.screen_height()
-    logger.debug(width, height)
+
     # connector.print_all_process_info()
 
-    timeit(connector.get_screenshot, 2, True, True)
-    timeit(connector.get_screenshot, 2, False, True)
+    # timeit(connector.get_screenshot, 2, True, True)
+    # timeit(connector.get_screenshot, 2, False, True)
     timeit(connector.get_screenshot, 2, False, False)
 
 
@@ -352,8 +360,10 @@ if __name__ == "__main__":
     parser.add_argument("--phone_ip", "-i", type=str, required=True, help='Ip of your phone')
     parser.add_argument("--config_file", "-c", type=str, help='Config file',
                         default="./config/adbc.json")
+    parser.add_argument("--log_level", "-l", help='Config file',
+                        default="INFO", type=lambda x: LOG_DICO[x],choices=LOG_DICO.keys())
     argument = parser.parse_args()
-    run(argument.phone_ip, argument.config_file)
+    run(argument.phone_ip, argument.config_file, argument.log_level)
 
     # print(image.getpixel((100, 100)))
 

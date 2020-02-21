@@ -1,4 +1,4 @@
-
+import logging
 
 CMD_SHELL_TAP = "input tap"
 CMD_SHELL_SWIPE = "input swipe"
@@ -10,3 +10,4 @@ CMD_WM_SIZE = "wm size"
 
 REMOTE_SCREENSHOT_DIRECTORY = "/sdcard"
 OUTPUT_DIR = "output"
+LOG_DICO = {"DEBUG": logging.DEBUG, "INFO": logging.INFO, "ERROR": logging.ERROR}
