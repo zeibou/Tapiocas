@@ -1,4 +1,4 @@
 {
-      "output_dir":"./output",
-      "log_dir": "./log"
+      "output_dir":"../output",
+      "log_dir": "../log"
 }
