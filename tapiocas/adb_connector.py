@@ -9,9 +9,9 @@ import argparse
 from adb_shell.adb_device import AdbDeviceTcp
 from adb_shell.auth.sign_pythonrsa import PythonRSASigner
 
-from constants import *
+from tapiocas.constants import *
 import logging
-import log_manager
+from tapiocas import log_manager
 import json
 from datetime import datetime
 
@@ -359,7 +359,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Android bot')
     parser.add_argument("--phone_ip", "-i", type=str, required=True, help='Ip of your phone')
     parser.add_argument("--config_file", "-c", type=str, help='Config file',
-                        default="./config/adbc.json")
+                        default="../config/adbc.json")
     parser.add_argument("--log_level", "-l", help='Config file',
                         default="INFO", type=lambda x: LOG_DICO[x],choices=LOG_DICO.keys())
     argument = parser.parse_args()
