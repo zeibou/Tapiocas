@@ -5,15 +5,16 @@ import re
 import tempfile
 from PIL import Image
 import argparse
+import logging
+from datetime import datetime
+
 
 from adb_shell.adb_device import AdbDeviceTcp
 from adb_shell.auth.sign_pythonrsa import PythonRSASigner
 
 from tapiocas.constants import *
-import logging
 from tapiocas import log_manager
-import json
-from datetime import datetime
+from tapiocas import config_manager
 
 logger = logging.getLogger(__name__)
 logging.getLogger('adb_shell').setLevel(logging.INFO)
@@ -78,11 +79,13 @@ class AdbConnector:
     """
     wraps adb_shell functions for simpler automation
     """
-    def __init__(self, ip=None, need_auth=True, device_name="", auto_reconnect_seconds=60):
+    def __init__(self, ip=None, need_auth=True, device_name="", auto_reconnect_seconds=60, adbkey_path=None, output_dir=None):
         self.ip = ip
         self.device_name = device_name
         self.need_auth = need_auth
         self.auto_reconnect_seconds = auto_reconnect_seconds
+        self.adbkey_path = adbkey_path
+        self.output_dir = output_dir
 
         self._event_handler = AdbConnectorEventManager()
         self._last_connected_time = time.time()
@@ -102,14 +105,13 @@ class AdbConnector:
         if self._device:
             return
 
-
         logger.debug(f"connecting to {self.ip}")
         self._last_connected_time = now
         self._device = AdbDeviceTcp(self.ip, default_timeout_s=self.auto_reconnect_seconds)
         if not self.need_auth:
             self._device.connect(auth_timeout_s=0.1)
         else:
-            with open(os.path.expanduser('~/.android/adbkey')) as f:
+            with open(os.path.expanduser(self.adbkey_path)) as f:
                 private_key = f.read()
             signer = PythonRSASigner('', private_key)
             self._device.connect(rsa_keys=[signer], auth_timeout_s=0.1)
@@ -128,7 +130,6 @@ class AdbConnector:
     def _pull(self, from_file, to_file):
         logger.debug(f"pull {from_file} to {to_file}")
         return self._device.pull(from_file, to_file)
-
 
     def tap(self, x, y, wait_ms = 100):
         """
@@ -247,11 +248,10 @@ class AdbConnector:
         random_part = next(tempfile._get_candidate_names())
         return os.path.join(REMOTE_SCREENSHOT_DIRECTORY, f"screenshot_adb_{random_part}.{extension}")
 
-    @staticmethod
-    def get_temp_local_filepath(extension):
-        if not os.path.exists(OUTPUT_DIR):
-            os.mkdir(OUTPUT_DIR)
-        return os.path.realpath(f"{OUTPUT_DIR}/screenshot.{extension}")
+    def get_temp_local_filepath(self, extension):
+        if not os.path.exists(self.output_dir):
+            os.mkdir(self.output_dir)
+        return os.path.realpath(f"{self.output_dir}/screenshot.{extension}")
 
     def _get_screenshot_png_pull_file(self) -> Image:
         self._connect()
@@ -281,67 +281,41 @@ class AdbConnector:
         return image
 
 
-def get_pixel(image, x, y):
-    logger.debug(image.getpixel((x, y)))
+def run(config: config_manager.Configuration):
+    log_manager.initialize_log(config.log_dir, log_file_name="adb_connector", log_level=config.log_level)
 
-def timeit(method, n, *args):
-    logger.info(f"Running {method}")
-    t = time.time()
-    for _ in range(n):
-        method(*args)
+    #logger = logging.getLogger(__name__)
+    #logger.setLevel(config.log_level)
+    logging.info('Starting adb connector')
+    logging.info('Pid is {0}'.format(os.getpid()))
+    logging.info('Log folder {0}'.format(config.log_dir))
+    logging.info('Today is {0}'.format(str(datetime.today())))
+    logging.info(f'Connecting to {config.phone_ip}')
 
-    logger.info(time.time() - t)
-
-
-def run(phone_ip, config_file, log_level):
-    if not os.path.exists(config_file):
-        raise FileNotFoundError(f"No file found at [{config_file}]")
-    with open(config_file, "r") as fin:
-        config = json.load(fin)
-    log_folder = config["log_dir"]
-    log_manager.initialize_log(log_folder)
-
-    logger = logging.getLogger(__name__)
-    logger.setLevel(log_level)
-    logger.info('Starting adb connector')
-    logger.info('Pid is {0}'.format(os.getpid()))
-    logger.info('Log folder {0}'.format(log_folder))
-    logger.info('Today is {0}'.format(str(datetime.today())))
-
-
-
-    connector = AdbConnector(ip=phone_ip)
+    connector = AdbConnector(ip=config.phone_ip, adbkey_path=config.adbkey_path)
     width = connector.screen_width()
     height = connector.screen_height()
-    logger.debug(f"Screen is {width}x{height}")
+    logging.info(f"Screen is {width}x{height}")
 
-
-    connector.tap(1000, 2000)
-    # connector.listen()
-
-    # connector.print_all_process_info()
-
-    # timeit(connector.get_screenshot, 2, True, True)
-    # timeit(connector.get_screenshot, 2, False, True)
-    timeit(connector.get_screenshot, 2, False, False)
+    start = time.perf_counter()
+    image = connector.get_screenshot(False, False)
+    end = time.perf_counter()
+    image.show()
+    logging.info(f"image captured in {end-start:.2} seconds")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Android bot')
-    parser.add_argument("--phone_ip", "-i", type=str, required=True, help='Ip of your phone')
-    parser.add_argument("--config_file", "-c", type=str, help='Config file',
-                        default="../config/adbc.json")
-    parser.add_argument("--log_level", "-l", help='Config file',
-                        default="INFO", type=lambda x: LOG_DICO[x],choices=LOG_DICO.keys())
+    parser.add_argument("--phone_ip", "-i", type=str, help='Ip of your phone')
+    parser.add_argument("--config_file", "-c", type=str, help='Config file', default=CUSTOM_CONFIG_FILE)
+    parser.add_argument("--log_level", "-l", help='Config file', default="INFO")
     argument = parser.parse_args()
-    run(argument.phone_ip, argument.config_file, argument.log_level)
 
-    # print(image.getpixel((100, 100)))
+    configuration = config_manager.get_configuration(argument.config_file)
 
-    # connector.listen(timeout_ms=10_000)
+    if argument.phone_ip:
+        configuration.phone_ip = argument.phone_ip
+    if argument.log_level:
+        configuration.log_level = argument.log_level
 
-    # connector.event_press(0, 500, 500)
-    # connector.event_flush()
-    # connector.wait(3000)
-    # connector.event_release(0)
-    # connector.event_flush()
+    run(configuration)
