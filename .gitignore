@@ -4,3 +4,7 @@ venv/
 __pycache__/
 output/
 log/
+
+# exclude all config files except the default one
+config/*
+!config/default.json

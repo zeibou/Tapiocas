@@ -4,19 +4,24 @@ import os
 import shutil
 import datetime
 
-def initialize_log(log_folder):
-    if not os.path.exists(log_folder):
-        os.makedirs(log_folder)
-    file_name = os.path.join(log_folder, f'adb_connector.log')
+
+def initialize_log(log_folder, log_file_name='tapiocas', log_level='DEBUG'):
+    os.makedirs(log_folder, exist_ok=True)
+    file_name = os.path.join(log_folder, f'{log_file_name}.log')
     if os.path.exists(file_name):
         archive_folder = os.path.join(log_folder, 'archive')
-        if not os.path.exists(archive_folder):
-            os.makedirs(archive_folder)
-        shutil.copyfile(file_name, os.path.join(archive_folder,
-                                                'adb_connector_{0}.log'.format(datetime.datetime.fromtimestamp(
-                                                    os.path.getctime(file_name)).strftime("%Y%m%d_%H%M%S"))))
+        archive_file(file_name, archive_folder, log_file_name)
+    set_logging_config(file_name, log_level)
 
-        os.remove(file_name)
+
+def archive_file(file_path, archive_folder, log_file_name):
+    os.makedirs(archive_folder, exist_ok=True)
+    suffix = datetime.datetime.fromtimestamp(os.path.getctime(file_path)).strftime("%Y%m%d_%H%M%S")
+    shutil.copyfile(file_path, os.path.join(archive_folder, f'{log_file_name}_{suffix}.log'))
+    os.remove(file_path)
+
+
+def set_logging_config(file_name, log_level):
     logging.config.dictConfig({
         'version': 1,
         'disable_existing_loggers': False,
@@ -28,12 +33,12 @@ def initialize_log(log_folder):
         },
         'handlers': {
             'console': {
-                'level': 'DEBUG',
+                'level': log_level,
                 'formatter': 'standard',
                 'class': 'logging.StreamHandler',
             },
             'file': {
-                'level': 'DEBUG',
+                'level': log_level,
                 'filename': file_name,
                 'formatter': 'standard',
                 'class': 'logging.handlers.RotatingFileHandler',
@@ -43,7 +48,7 @@ def initialize_log(log_folder):
         'loggers': {
             '': {
                 'handlers': ['console', 'file'],
-                'level': 'DEBUG',
+                'level': log_level,
                 'propagate': True
             }
         }

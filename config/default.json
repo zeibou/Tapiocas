@@ -1,0 +1,7 @@
+{
+      "phone_ip": "",
+      "adbkey_path": "~/.android/adbkey",
+      "output_dir": "../output",
+      "log_dir": "../log",
+      "log_level": "INFO"
+}
