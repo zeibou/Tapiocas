@@ -131,7 +131,7 @@ class AdbConnector:
         logger.debug(f"pull {from_file} to {to_file}")
         return self._device.pull(from_file, to_file)
 
-    def tap(self, x, y, wait_ms = 100):
+    def tap(self, x, y, wait_ms=100):
         """
         tap the screen and force wait 100ms by default to simulate real taps if several in a row
         :param x:
@@ -143,7 +143,7 @@ class AdbConnector:
         self._shell(f'{CMD_SHELL_TAP} {x:.0f} {y:.0f}')
         self.wait(wait_ms)
 
-    def press(self, x, y, time_ms = 0, wait_ms = 0):
+    def press(self, x, y, time_ms=0, wait_ms=0):
         """
         long tap, implemented with a static swipe
         :param x:
@@ -156,7 +156,7 @@ class AdbConnector:
         self._shell(f'{CMD_SHELL_SWIPE} {x:.0f} {y:.0f} {x:.0f} {y:.0f} {time_ms}')
         self.wait(wait_ms)
 
-    def swipe(self, x1, y1, x2, y2, time_ms = 0, wait_ms = 0):
+    def swipe(self, x1, y1, x2, y2, time_ms=0, wait_ms=0):
         """
         swipe from point (x1, y1) to point (x2, y2) in the span of time_ms
         careful, swipe has inertia, so if it is used to scroll a screen for example,
@@ -240,7 +240,7 @@ class AdbConnector:
                 return self._get_screenshot_raw_pull_file()
             return self._get_screenshot_png_pull_file()
         if raw:
-            raise Exception("Not implemented")
+                return self._get_screenshot_raw_stream()
         return self._get_screenshot_png_stream()
 
     @staticmethod
@@ -257,58 +257,86 @@ class AdbConnector:
         self._connect()
         png_remote_filepath = self.get_temp_remote_filepath("png")
         png_local_filepath = self.get_temp_local_filepath("png")
+        start = time.perf_counter()
         self._shell(f"{CMD_SCREENSHOT_PNG} {png_remote_filepath}")
+        end = time.perf_counter()
+        logging.debug(f"png image screenshot took {end-start:.2f} seconds")
         self._pull(png_remote_filepath, png_local_filepath)
+        start, end = end, time.perf_counter()
+        logging.debug(f"png image pulled in {end-start:.2f} seconds")
         self._shell(f"rm {png_remote_filepath}")
+        start, end = end, time.perf_counter()
+        logging.debug(f"remote image deleted in {end-start:.2f} seconds")
         return Image.open(png_local_filepath)
 
     def _get_screenshot_raw_pull_file(self) -> Image:
         self._connect()
         raw_remote_filepath = self.get_temp_remote_filepath("raw")
         raw_local_filepath = self.get_temp_local_filepath("raw")
+        start = time.perf_counter()
         self._shell(f"{CMD_SCREENSHOT_RAW} {raw_remote_filepath}")
+        end = time.perf_counter()
+        logging.debug(f"raw image screenshot took {end-start:.2f} seconds")
         self._pull(raw_remote_filepath, raw_local_filepath)
+        start, end = end, time.perf_counter()
+        logging.debug(f"raw image pulled in {end-start:.2f} seconds")
         self._shell(f"rm {raw_remote_filepath}")
+        start, end = end, time.perf_counter()
+        logging.debug(f"remote image deleted in {end-start:.2f} seconds")
         with open(raw_local_filepath, 'rb') as f:
             raw = f.read()
-        return Image.frombuffer('RGBA', (self.screen_height(), self.screen_width()), raw[12:], 'raw', 'RGBX', 0, 1)
+        return Image.frombuffer('RGBA', (self.screen_width(), self.screen_height()), raw[12:], 'raw', 'RGBX', 0, 1)
 
-    # todo: use exec-out instead of shell
+    # todo: use exec-out instead of shell, because sometimes shell + no-decoding seems to be missing some bytes
     def _get_screenshot_png_stream(self) -> Image:
         self._connect()
         raw = self._shell(CMD_SCREENSHOT_PNG, decode=False)
         image = Image.open(io.BytesIO(raw))
         return image
 
+    # todo: use exec-out instead of shell, because sometimes shell + no-decoding seems to be missing some bytes
+    def _get_screenshot_raw_stream(self) -> Image:
+        self._connect()
+        raw = self._shell(CMD_SCREENSHOT_RAW, decode=False)
+        image = Image.frombuffer('RGBA', (self.screen_width(), self.screen_height()), raw[12:], 'raw', 'RGBX', 0, 1)
+        return image
+
 
 def run(config: config_manager.Configuration):
     log_manager.initialize_log(config.log_dir, log_file_name="adb_connector", log_level=config.log_level)
 
-    #logger = logging.getLogger(__name__)
-    #logger.setLevel(config.log_level)
     logging.info('Starting adb connector')
     logging.info('Pid is {0}'.format(os.getpid()))
     logging.info('Log folder {0}'.format(config.log_dir))
     logging.info('Today is {0}'.format(str(datetime.today())))
     logging.info(f'Connecting to {config.phone_ip}')
 
-    connector = AdbConnector(ip=config.phone_ip, adbkey_path=config.adbkey_path)
+    connector = AdbConnector(ip=config.phone_ip, adbkey_path=config.adbkey_path, output_dir=config.output_dir)
     width = connector.screen_width()
     height = connector.screen_height()
     logging.info(f"Screen is {width}x{height}")
 
-    start = time.perf_counter()
-    image = connector.get_screenshot(False, False)
-    end = time.perf_counter()
+    """
+    on complex images, raw screenshot will be way faster than png screenshot
+    but on wifi connection (through home router), pulling the data is very slow, 
+    and raw image pull takes way longer than png image pull (because more data)
+    Therefore png still seems to bethe better choice for wifi, 
+    but raw could be faster once adb-shell has usb connection implemented
+    """
+    for raw in (False, True):
+        for pull in (False, True):
+            start = time.perf_counter()
+            image = connector.get_screenshot(raw=raw, pull=pull)
+            end = time.perf_counter()
+            logging.info(f"image [raw={raw} pull={pull}] captured in {end-start:.2f} seconds")
     image.show()
-    logging.info(f"image captured in {end-start:.2} seconds")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Android bot')
     parser.add_argument("--phone_ip", "-i", type=str, help='Ip of your phone')
     parser.add_argument("--config_file", "-c", type=str, help='Config file', default=CUSTOM_CONFIG_FILE)
-    parser.add_argument("--log_level", "-l", help='Config file', default="INFO")
+    parser.add_argument("--log_level", "-l", help='Config file')
     argument = parser.parse_args()
 
     configuration = config_manager.get_configuration(argument.config_file)
