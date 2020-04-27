@@ -1,1 +1,3 @@
 adb-shell>=0.1.3
+pysimplegui
+Pillow
