@@ -103,6 +103,7 @@ def capture_screenshot_action(model: Model, worker: BackgroundWorker, connector:
             img = model.main_image.copy()
             img.thumbnail(DISPLAY_MAX_SIZE)
             model.main_image_element.update(data=get_image_bytes(img))
+            update_zoom_image(model)
             model.screenshot_status_label_element.update("")
         except:
             model.screenshot_status_label_element.update("Error")
@@ -120,7 +121,7 @@ def display_coordinates(model: Model):
         if pos:
             x, y = get_coordinates_on_image(pos, get_image_size(model.zoom_image_element), (model.zoom_radius * 2, model.zoom_radius * 2))
             x, y = x + model.zoom_center[0] - model.zoom_radius, y + model.zoom_center[1] - model.zoom_radius
-            model.coord_label_element.update(value=f"x={x}, y={y}")
+            model.coord_label_element.update(value=f"x={x:.0f}, y={y:.0f}")
 
 
 def update_zoom_image(model: Model):
