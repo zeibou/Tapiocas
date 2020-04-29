@@ -40,7 +40,7 @@ class Model:
     zoom_image_element: sg.Image
     zoom_column: sg.Column
     coord_label_element: sg.Text
-    screenshot_status_label_element: sg.Text
+    status_label_element: sg.Text
 
 
 class BackgroundWorker:
@@ -101,26 +101,28 @@ def get_coordinates_on_image(position_on_image, image_size, device_size):
 def capture_screenshot_action(model: Model, worker: BackgroundWorker, connector: AdbConnector):
     def action():
         try:
-            model.screenshot_status_label_element.update("In progress...")
+            model.status_label_element.update("Screenshot in progress...")
             model.main_image = connector.get_screenshot(raw=SCREENSHOT_RAW, pull=SCREENSHOT_PULL)
             img = model.main_image.copy()
             img.thumbnail(DISPLAY_MAX_SIZE)
             model.main_image_element.update(data=get_image_bytes(img))
             update_zoom_image(model)
-            model.screenshot_status_label_element.update("")
-        except:
-            model.screenshot_status_label_element.update("Error")
+            model.status_label_element.update("")
+        except Exception as e:
+            model.status_label_element.update("Error")
+            logging.error(e)
     worker.enqueue(action)
 
 
 def send_tap_action(coords, model: Model, worker: BackgroundWorker, connector: AdbConnector):
     def action():
         try:
-            model.screenshot_status_label_element.update(f"Sending tap to {coords}")
+            model.status_label_element.update(f"Sending tap to {coords}")
             connector.tap(*coords, wait_ms=0)
-            model.screenshot_status_label_element.update("")
-        except:
-            model.screenshot_status_label_element.update("Error")
+            model.status_label_element.update("")
+        except Exception as e:
+            model.status_label_element.update("Error")
+            logging.error(e)
     worker.enqueue(action)
 
 
@@ -155,15 +157,16 @@ def update_zoom_image(model: Model):
 
 def layout_col_main_image_menu(model: Model):
     screenshot_btn = sg.B("Get Screenshot", key=KEY_BUTTON_SCREENSHOT, size=(30, 1))
-    model.screenshot_status_label_element = sg.T("", size=(20, 1))
+    model.status_label_element = sg.T("", size=(40, 1))
     GROUP_ID = "MAIN_CLICK_GRP"
     r1 = sg.Radio("Zoom on click", key=KEY_RADIO_ZOOM, group_id=GROUP_ID, default=True)
     r2 = sg.Radio("Tap on click", key=KEY_RADIO_TAP, group_id=GROUP_ID)
-    col = sg.Column(layout=[[r1, r2], [screenshot_btn, model.screenshot_status_label_element]])
+    col = sg.Column(layout=[[model.status_label_element], [r1, r2], [screenshot_btn]])
     return col
 
 
 def layout_col_main_image(model: Model):
+    model.coord_label_element = sg.Text(size=(30, 1), justification='center')
     model.main_image = Image.new('RGB', model.device_screen_size, START_COLOR)
     img = model.main_image.copy()
     img.thumbnail(DISPLAY_MAX_SIZE)
@@ -203,7 +206,6 @@ def main():
     model.zoom_center = (0, 0)
     model.zoom_radius = 50
 
-    model.coord_label_element = sg.Text(size=(30, 1))
     layout = [
         [layout_col_main_image(model), layout_col_zoom_image(model)]
     ]
