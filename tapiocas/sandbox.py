@@ -15,6 +15,8 @@ KEY_BUTTON_SCREENSHOT = "SCREENSHOT-key"
 KEY_BUTTON_IMG_CLICK = "MAIN_IMAGE_CLICK-key"
 KEY_BUTTON_ZOOM_FRM_CLOSE = "ZOOM_IMAGE_CLOSE-key"
 KEY_SLIDER_ZOOM = "ZOOM_IMAGE_SLIDER-key"
+KEY_RADIO_ZOOM = "ZOOM_ON_CLICK-radio-key"
+KEY_RADIO_TAP = "TAP_ON_CLICK-radio-key"
 
 DISPLAY_MAX_SIZE = (300, 600)
 SCREENSHOT_RAW = False
@@ -110,6 +112,17 @@ def capture_screenshot_action(model: Model, worker: BackgroundWorker, connector:
     worker.enqueue(action)
 
 
+def send_tap_action(coords, model: Model, worker: BackgroundWorker, connector: AdbConnector):
+    def action():
+        try:
+            model.screenshot_status_label_element.update(f"Sending tap to {coords}")
+            connector.tap(*coords, wait_ms=0)
+            model.screenshot_status_label_element.update("")
+        except:
+            model.screenshot_status_label_element.update("Error")
+    worker.enqueue(action)
+
+
 def display_coordinates(model: Model):
     model.coord_label_element.update(value="")
     pos = get_pointer_position_on_image(model.main_image_element)
@@ -132,6 +145,16 @@ def update_zoom_image(model: Model):
     model.zoom_image_element.update(data=get_image_bytes(zoom))
 
 
+def layout_col_main_image_menu(model: Model):
+    screenshot_btn = sg.B("Get Screenshot", key=KEY_BUTTON_SCREENSHOT, size=(30, 1))
+    model.screenshot_status_label_element = sg.T("", size=(20, 1))
+    GROUP_ID = "MAIN_CLICK_GRP"
+    r1 = sg.Radio("Zoom on click", key=KEY_RADIO_ZOOM, group_id=GROUP_ID, default=True)
+    r2 = sg.Radio("Tap on click", key=KEY_RADIO_TAP, group_id=GROUP_ID)
+    col = sg.Column(layout=[[r1, r2], [screenshot_btn, model.screenshot_status_label_element]])
+    return col
+
+
 def layout_col_main_image(model: Model):
     model.main_image = Image.new('RGB', model.device_screen_size, START_COLOR)
     img = model.main_image.copy()
@@ -139,9 +162,8 @@ def layout_col_main_image(model: Model):
     model.main_image_element = sg.Image(data=get_image_bytes(img),
                                         enable_events=True,
                                         key=KEY_BUTTON_IMG_CLICK)
-    screenshot_btn = sg.B("Get Screenshot", key=KEY_BUTTON_SCREENSHOT, size=(30, 1))
-    model.screenshot_status_label_element = sg.T("", size=(20, 1))
-    col = sg.Column(layout=[[screenshot_btn, model.screenshot_status_label_element], [model.main_image_element], [model.coord_label_element]],
+
+    col = sg.Column(layout=[[layout_col_main_image_menu(model)], [model.main_image_element], [model.coord_label_element]],
                     element_justification='center')
     return col
 
@@ -187,9 +209,13 @@ def main():
         elif event == KEY_BUTTON_IMG_CLICK:
             pos = get_pointer_position_on_image(model.main_image_element)
             if pos:
-                model.zoom_center = get_coordinates_on_image(pos, get_image_size(model.main_image_element), model.device_screen_size)
-                update_zoom_image(model)
-                model.zoom_column.update(visible=True)
+                if values[KEY_RADIO_ZOOM]:
+                    model.zoom_center = get_coordinates_on_image(pos, get_image_size(model.main_image_element), model.device_screen_size)
+                    update_zoom_image(model)
+                    model.zoom_column.update(visible=True)
+                elif values[KEY_RADIO_TAP]:
+                    coords = get_coordinates_on_image(pos, get_image_size(model.main_image_element), model.device_screen_size)
+                    send_tap_action(coords, model, worker, connector)
         elif event == KEY_BUTTON_SCREENSHOT:
             capture_screenshot_action(model, worker, connector)
         elif event == KEY_BUTTON_ZOOM_FRM_CLOSE:
