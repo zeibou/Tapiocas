@@ -12,7 +12,8 @@ import config_manager
 import log_manager
 
 KEY_BUTTON_SCREENSHOT = "SCREENSHOT-key"
-KEY_BUTTON_IMG_CLICK = "MAIN_IMAGE_CLICK-key"
+KEY_IMAGE_MAIN = "MAIN_IMAGE-key"
+KEY_IMAGE_ZOOM = "ZOOM_IMAGE-key"
 KEY_BUTTON_ZOOM_FRM_CLOSE = "ZOOM_IMAGE_CLOSE-key"
 KEY_SLIDER_ZOOM = "ZOOM_IMAGE_SLIDER-key"
 KEY_RADIO_ZOOM = "ZOOM_ON_CLICK-radio-key"
@@ -123,18 +124,25 @@ def send_tap_action(coords, model: Model, worker: BackgroundWorker, connector: A
     worker.enqueue(action)
 
 
-def display_coordinates(model: Model):
-    model.coord_label_element.update(value="")
+def get_pointer_pos_in_device_coordinates(model: Model):
     pos = get_pointer_position_on_image(model.main_image_element)
     if pos:
-        x, y = get_coordinates_on_image(pos, get_image_size(model.main_image_element), model.device_screen_size)
-        model.coord_label_element.update(value=f"x={x}, y={y}")
+        return get_coordinates_on_image(pos, get_image_size(model.main_image_element), model.device_screen_size)
     else:
         pos = get_pointer_position_on_image(model.zoom_image_element)
         if pos:
-            x, y = get_coordinates_on_image(pos, get_image_size(model.zoom_image_element), (model.zoom_radius * 2, model.zoom_radius * 2))
-            x, y = x + model.zoom_center[0] - model.zoom_radius, y + model.zoom_center[1] - model.zoom_radius
-            model.coord_label_element.update(value=f"x={x:.0f}, y={y:.0f}")
+            zoom_diameter = int(model.zoom_radius * 2)
+            x, y = get_coordinates_on_image(pos, get_image_size(model.zoom_image_element), (zoom_diameter, zoom_diameter))
+            return x + model.zoom_center[0] - model.zoom_radius, y + model.zoom_center[1] - model.zoom_radius
+
+
+def display_pointer_pos_in_device_coordinates(model: Model):
+    pos = get_pointer_pos_in_device_coordinates(model)
+    if pos:
+        x, y = pos
+        model.coord_label_element.update(value=f"x={x}  y={y}")
+    else:
+        model.coord_label_element.update(value="")
 
 
 def update_zoom_image(model: Model):
@@ -161,8 +169,7 @@ def layout_col_main_image(model: Model):
     img.thumbnail(DISPLAY_MAX_SIZE)
     model.main_image_element = sg.Image(data=get_image_bytes(img),
                                         enable_events=True,
-                                        key=KEY_BUTTON_IMG_CLICK)
-
+                                        key=KEY_IMAGE_MAIN)
     col = sg.Column(layout=[[layout_col_main_image_menu(model)], [model.main_image_element], [model.coord_label_element]],
                     element_justification='center')
     return col
@@ -170,7 +177,9 @@ def layout_col_main_image(model: Model):
 
 def layout_col_zoom_image(model: Model):
     model.zoom_image = Image.new('RGB', (500, 500), START_COLOR)
-    model.zoom_image_element = sg.Image(data=get_image_bytes(model.zoom_image))
+    model.zoom_image_element = sg.Image(data=get_image_bytes(model.zoom_image),
+                                        enable_events=True,
+                                        key=KEY_IMAGE_ZOOM)
     close_button = sg.B("Close", key=KEY_BUTTON_ZOOM_FRM_CLOSE)
     zoom_slider = sg.Slider(default_value=50, range=(ZOOM_RADIUS_MIN, ZOOM_RADIUS_MAX), disable_number_display=True,
                             orientation='h', resolution=10, enable_events=True, key=KEY_SLIDER_ZOOM)
@@ -203,19 +212,18 @@ def main():
     while True:
         event, values = window.read(timeout=100)
         if event == sg.TIMEOUT_KEY:
-            display_coordinates(model)
+            display_pointer_pos_in_device_coordinates(model)
         elif event in (None, 'Exit'):
             break
-        elif event == KEY_BUTTON_IMG_CLICK:
-            pos = get_pointer_position_on_image(model.main_image_element)
+        elif event in (KEY_IMAGE_MAIN, KEY_IMAGE_ZOOM):
+            pos = get_pointer_pos_in_device_coordinates(model)
             if pos:
                 if values[KEY_RADIO_ZOOM]:
-                    model.zoom_center = get_coordinates_on_image(pos, get_image_size(model.main_image_element), model.device_screen_size)
+                    model.zoom_center = pos
                     update_zoom_image(model)
                     model.zoom_column.update(visible=True)
                 elif values[KEY_RADIO_TAP]:
-                    coords = get_coordinates_on_image(pos, get_image_size(model.main_image_element), model.device_screen_size)
-                    send_tap_action(coords, model, worker, connector)
+                    send_tap_action(pos, model, worker, connector)
         elif event == KEY_BUTTON_SCREENSHOT:
             capture_screenshot_action(model, worker, connector)
         elif event == KEY_BUTTON_ZOOM_FRM_CLOSE:
