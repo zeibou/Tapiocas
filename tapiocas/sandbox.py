@@ -18,6 +18,8 @@ KEY_BUTTON_ZOOM_FRM_CLOSE = "ZOOM_IMAGE_CLOSE-key"
 KEY_SLIDER_ZOOM = "ZOOM_IMAGE_SLIDER-key"
 KEY_RADIO_ZOOM = "ZOOM_ON_CLICK-radio-key"
 KEY_RADIO_TAP = "TAP_ON_CLICK-radio-key"
+KEY_BUTTON_RECORD = "RECORDING_CLICK-key"
+KEY_MULTILINE_RECORD = "RECORDING_TEXT-key"
 
 DISPLAY_MAX_SIZE = (300, 600)
 SCREENSHOT_RAW = False
@@ -32,9 +34,13 @@ class Model:
     device_screen_size: (int, int)
     zoom_center: (int, int)
     zoom_radius: int
+    recording: bool
+    recording_stopped: bool
 
     main_image: Image
     zoom_image = Image
+
+    window: sg.Window
 
     main_image_element: sg.Image
     zoom_image_element: sg.Image
@@ -126,6 +132,31 @@ def send_tap_action(coords, model: Model, worker: BackgroundWorker, connector: A
     worker.enqueue(action)
 
 
+def record_events_action(model: Model, worker: BackgroundWorker, connector: AdbConnector):
+    def action():
+        try:
+            model.recording = True
+            model.recording_stopped = False
+            model.window[KEY_BUTTON_RECORD].update(text="Stop recording")
+            model.window[KEY_MULTILINE_RECORD].update(background_color="tan1")
+            model.status_label_element.update(f"Recording events...")
+            for t in connector.listen():
+                model.window[KEY_MULTILINE_RECORD].print(t)
+            model.status_label_element.update("")
+        except Exception as e:
+            # exception is expected when we normally abort the recording, because we close the connection
+            if model.recording_stopped:
+                model.status_label_element.update("")
+            else:
+                model.status_label_element.update("Error")
+                logging.error(e)
+        finally:
+            model.recording = False
+            model.window[KEY_BUTTON_RECORD].update(text="Record events")
+            model.window[KEY_MULTILINE_RECORD].update(background_color="lightsteelblue2")
+    worker.enqueue(action)
+
+
 def get_pointer_pos_in_device_coordinates(model: Model):
     pos = get_pointer_position_on_image(model.main_image_element)
     if pos:
@@ -153,6 +184,13 @@ def update_zoom_image(model: Model):
     zoom = model.main_image.crop((x - zr, y - zr, x + zr, y + zr))
     zoom = zoom.resize((500, 500), resample=Image.NEAREST)
     model.zoom_image_element.update(data=get_image_bytes(zoom))
+
+
+def layout_col_action_panel(model: Model):
+    b = sg.B("Record events", key=KEY_BUTTON_RECORD, size=(40, 1))
+    t = sg.Multiline(size=(80, 30), key=KEY_MULTILINE_RECORD, autoscroll=True, background_color='lightsteelblue1')
+    col = sg.Column(layout=[[b], [t]])
+    return col
 
 
 def layout_col_main_image_menu(model: Model):
@@ -205,11 +243,13 @@ def main():
     model.device_screen_size = (width, height)
     model.zoom_center = (0, 0)
     model.zoom_radius = 50
+    model.recording = False
 
     layout = [
-        [layout_col_main_image(model), layout_col_zoom_image(model)]
+        [layout_col_action_panel(model), layout_col_main_image(model), layout_col_zoom_image(model)]
     ]
     window = sg.Window("Tapiocas' Sandbox", layout)
+    model.window = window
 
     while True:
         event, values = window.read(timeout=100)
@@ -233,6 +273,13 @@ def main():
         elif event == KEY_SLIDER_ZOOM:
             model.zoom_radius = values[KEY_SLIDER_ZOOM]
             update_zoom_image(model)
+        elif event == KEY_BUTTON_RECORD:
+            if model.recording:
+                # not sent to background worker because we want to abort the current action
+                model.recording_stopped = True
+                connector.abort_listening()
+            else:
+                record_events_action(model, worker, connector)
 
     window.close()
 
