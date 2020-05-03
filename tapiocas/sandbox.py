@@ -6,15 +6,29 @@ import collections
 import threading
 import time
 import random
+from enum import Enum, unique, auto
 
 from adb_connector import AdbConnector
 import config_manager
 import log_manager
 
-KEY_BUTTON_SCREENSHOT = "SCREENSHOT-key"
-KEY_BUTTON_IMG_CLICK = "MAIN_IMAGE_CLICK-key"
-KEY_BUTTON_ZOOM_FRM_CLOSE = "ZOOM_IMAGE_CLOSE-key"
-KEY_SLIDER_ZOOM = "ZOOM_IMAGE_SLIDER-key"
+
+@unique
+class Keys(Enum):
+    BUTTON_RECORD = auto(),
+    MULTILINE_RECORD = auto(),
+    BUTTON_SCREENSHOT = auto(),
+    IMAGE_MAIN = auto(),
+    RADIO_GROUP_IMAGE_MAIN_CLICK = auto(),
+    RADIO_BTN_IMAGE_MAIN_ZOOM = auto(),
+    RADIO_BTN_IMAGE_MAIN_TAP = auto(),
+    IMAGE_ZOOM = auto(),
+    SLIDER_ZOOM = auto(),
+    BUTTON_ZOOM_CLOSE = auto(),
+    COLUMN_ZOOM = auto(),
+    LABEL_STATUS = auto(),
+    LABEL_COORD = auto(),
+
 
 DISPLAY_MAX_SIZE = (300, 600)
 SCREENSHOT_RAW = False
@@ -23,6 +37,8 @@ SCREENSHOT_PULL = False
 ZOOM_RADIUS_MIN = 10
 ZOOM_RADIUS_MAX = 100
 START_COLOR = (random.randint(25, 100), random.randint(25, 100), random.randint(25, 100))
+RECORDING_COLOR = "tan1"
+NO_RECORDING_COLOR = "lightsteelblue2"
 
 
 class Model:
@@ -30,14 +46,13 @@ class Model:
     zoom_center: (int, int)
     zoom_radius: int
 
+    recording: bool
+    recording_stopped: bool
+
     main_image: Image
     zoom_image = Image
 
-    main_image_element: sg.Image
-    zoom_image_element: sg.Image
-    zoom_column: sg.Column
-    coord_label_element: sg.Text
-    screenshot_status_label_element: sg.Text
+    window: sg.Window
 
 
 class BackgroundWorker:
@@ -98,29 +113,75 @@ def get_coordinates_on_image(position_on_image, image_size, device_size):
 def capture_screenshot_action(model: Model, worker: BackgroundWorker, connector: AdbConnector):
     def action():
         try:
-            model.screenshot_status_label_element.update("In progress...")
+            model.window[Keys.LABEL_STATUS].update("Screenshot in progress...")
             model.main_image = connector.get_screenshot(raw=SCREENSHOT_RAW, pull=SCREENSHOT_PULL)
             img = model.main_image.copy()
             img.thumbnail(DISPLAY_MAX_SIZE)
-            model.main_image_element.update(data=get_image_bytes(img))
-            model.screenshot_status_label_element.update("")
-        except:
-            model.screenshot_status_label_element.update("Error")
+            model.window[Keys.IMAGE_MAIN].update(data=get_image_bytes(img))
+            update_zoom_image(model)
+            model.window[Keys.LABEL_STATUS].update("")
+        except Exception as e:
+            model.window[Keys.LABEL_STATUS].update("Error")
+            logging.error(e)
     worker.enqueue(action)
 
 
-def display_coordinates(model: Model):
-    model.coord_label_element.update(value="")
-    pos = get_pointer_position_on_image(model.main_image_element)
+def send_tap_action(coords, model: Model, worker: BackgroundWorker, connector: AdbConnector):
+    def action():
+        try:
+            model.window[Keys.LABEL_STATUS].update(f"Sending tap to {coords}")
+            connector.tap(*coords, wait_ms=0)
+            model.window[Keys.LABEL_STATUS].update("")
+        except Exception as e:
+            model.window[Keys.LABEL_STATUS].update("Error")
+            logging.error(e)
+    worker.enqueue(action)
+
+
+def record_events_action(model: Model, worker: BackgroundWorker, connector: AdbConnector):
+    def action():
+        try:
+            model.recording = True
+            model.recording_stopped = False
+            model.window[Keys.BUTTON_RECORD].update(text="Stop recording")
+            model.window[Keys.MULTILINE_RECORD].update(background_color=RECORDING_COLOR)
+            model.window[Keys.LABEL_STATUS].update(f"Recording events...")
+            for t in connector.listen():
+                model.window[Keys.MULTILINE_RECORD].print(t)
+            model.window[Keys.LABEL_STATUS].update("")
+        except Exception as e:
+            # exception is expected when we normally abort the recording, because we close the connection
+            if model.recording_stopped:
+                model.window[Keys.LABEL_STATUS].update("")
+            else:
+                model.window[Keys.LABEL_STATUS].update("Error")
+                logging.error(e)
+        finally:
+            model.recording = False
+            model.window[Keys.BUTTON_RECORD].update(text="Record events")
+            model.window[Keys.MULTILINE_RECORD].update(background_color=NO_RECORDING_COLOR)
+    worker.enqueue(action)
+
+
+def get_pointer_pos_in_device_coordinates(model: Model):
+    pos = get_pointer_position_on_image(model.window[Keys.IMAGE_MAIN])
     if pos:
-        x, y = get_coordinates_on_image(pos, get_image_size(model.main_image_element), model.device_screen_size)
-        model.coord_label_element.update(value=f"x={x}, y={y}")
+        return get_coordinates_on_image(pos, get_image_size(model.window[Keys.IMAGE_MAIN]), model.device_screen_size)
     else:
-        pos = get_pointer_position_on_image(model.zoom_image_element)
+        pos = get_pointer_position_on_image(model.window[Keys.IMAGE_ZOOM])
         if pos:
-            x, y = get_coordinates_on_image(pos, get_image_size(model.zoom_image_element), (model.zoom_radius * 2, model.zoom_radius * 2))
-            x, y = x + model.zoom_center[0] - model.zoom_radius, y + model.zoom_center[1] - model.zoom_radius
-            model.coord_label_element.update(value=f"x={x}, y={y}")
+            zoom_diameter = int(model.zoom_radius * 2)
+            x, y = get_coordinates_on_image(pos, get_image_size(model.window[Keys.IMAGE_ZOOM]), (zoom_diameter, zoom_diameter))
+            return x + model.zoom_center[0] - model.zoom_radius, y + model.zoom_center[1] - model.zoom_radius
+
+
+def display_pointer_pos_in_device_coordinates(model: Model):
+    pos = get_pointer_pos_in_device_coordinates(model)
+    if pos:
+        x, y = pos
+        model.window[Keys.LABEL_COORD].update(value=f"x={int(x)}  y={int(y)}")
+    else:
+        model.window[Keys.LABEL_COORD].update(value="")
 
 
 def update_zoom_image(model: Model):
@@ -128,34 +189,51 @@ def update_zoom_image(model: Model):
     zr = model.zoom_radius
     zoom = model.main_image.crop((x - zr, y - zr, x + zr, y + zr))
     zoom = zoom.resize((500, 500), resample=Image.NEAREST)
-    model.zoom_image_element.update(data=get_image_bytes(zoom))
+    model.window[Keys.IMAGE_ZOOM].update(data=get_image_bytes(zoom))
+
+
+def layout_col_action_panel():
+    b = sg.B("Record events", key=Keys.BUTTON_RECORD, size=(40, 1))
+    t = sg.Multiline(size=(75, 30), key=Keys.MULTILINE_RECORD, autoscroll=True, background_color=NO_RECORDING_COLOR)
+    col = sg.Column(layout=[[b], [t]])
+    return col
+
+
+def layout_col_main_image_menu():
+    screenshot_btn = sg.B("Get Screenshot", key=Keys.BUTTON_SCREENSHOT, size=(30, 1))
+    status_label_element = sg.T("", size=(40, 1), key=Keys.LABEL_STATUS)
+    r1 = sg.Radio("Zoom on click", key=Keys.RADIO_BTN_IMAGE_MAIN_ZOOM, group_id=Keys.RADIO_GROUP_IMAGE_MAIN_CLICK, default=True)
+    r2 = sg.Radio("Tap on click", key=Keys.RADIO_BTN_IMAGE_MAIN_TAP, group_id=Keys.RADIO_GROUP_IMAGE_MAIN_CLICK)
+    col = sg.Column(layout=[[status_label_element], [r1, r2], [screenshot_btn]])
+    return col
 
 
 def layout_col_main_image(model: Model):
+    coord_label_element = sg.Text(size=(30, 1), justification='center', key=Keys.LABEL_COORD)
     model.main_image = Image.new('RGB', model.device_screen_size, START_COLOR)
     img = model.main_image.copy()
     img.thumbnail(DISPLAY_MAX_SIZE)
-    model.main_image_element = sg.Image(data=get_image_bytes(img),
+    main_image_element = sg.Image(data=get_image_bytes(img),
                                         enable_events=True,
-                                        key=KEY_BUTTON_IMG_CLICK)
-    screenshot_btn = sg.B("Get Screenshot", key=KEY_BUTTON_SCREENSHOT, size=(30, 1))
-    model.screenshot_status_label_element = sg.T("", size=(20, 1))
-    col = sg.Column(layout=[[screenshot_btn, model.screenshot_status_label_element], [model.main_image_element], [model.coord_label_element]],
+                                        key=Keys.IMAGE_MAIN)
+    col = sg.Column(layout=[[layout_col_main_image_menu()], [main_image_element], [coord_label_element]],
                     element_justification='center')
     return col
 
 
 def layout_col_zoom_image(model: Model):
     model.zoom_image = Image.new('RGB', (500, 500), START_COLOR)
-    model.zoom_image_element = sg.Image(data=get_image_bytes(model.zoom_image))
-    close_button = sg.B("Close", key=KEY_BUTTON_ZOOM_FRM_CLOSE)
+    zoom_image_element = sg.Image(data=get_image_bytes(model.zoom_image),
+                                        enable_events=True,
+                                        key=Keys.IMAGE_ZOOM)
+    close_button = sg.B("Close", key=Keys.BUTTON_ZOOM_CLOSE)
     zoom_slider = sg.Slider(default_value=50, range=(ZOOM_RADIUS_MIN, ZOOM_RADIUS_MAX), disable_number_display=True,
-                            orientation='h', resolution=10, enable_events=True, key=KEY_SLIDER_ZOOM)
+                            orientation='h', resolution=10, enable_events=True, key=Keys.SLIDER_ZOOM)
     col = sg.Column(layout=[[zoom_slider, close_button],
-                            [model.zoom_image_element]],
+                            [zoom_image_element]],
+                           key=Keys.COLUMN_ZOOM,
                            visible=False,
                            element_justification='center')
-    model.zoom_column = col
     return col
 
 
@@ -170,32 +248,43 @@ def main():
     model.device_screen_size = (width, height)
     model.zoom_center = (0, 0)
     model.zoom_radius = 50
+    model.recording = False
 
-    model.coord_label_element = sg.Text(size=(30, 1))
     layout = [
-        [layout_col_main_image(model), layout_col_zoom_image(model)]
+        [layout_col_action_panel(), layout_col_main_image(model), layout_col_zoom_image(model)]
     ]
     window = sg.Window("Tapiocas' Sandbox", layout)
+    model.window = window
 
     while True:
         event, values = window.read(timeout=100)
         if event == sg.TIMEOUT_KEY:
-            display_coordinates(model)
+            display_pointer_pos_in_device_coordinates(model)
         elif event in (None, 'Exit'):
             break
-        elif event == KEY_BUTTON_IMG_CLICK:
-            pos = get_pointer_position_on_image(model.main_image_element)
+        elif event in (Keys.IMAGE_MAIN, Keys.IMAGE_ZOOM):
+            pos = get_pointer_pos_in_device_coordinates(model)
             if pos:
-                model.zoom_center = get_coordinates_on_image(pos, get_image_size(model.main_image_element), model.device_screen_size)
-                update_zoom_image(model)
-                model.zoom_column.update(visible=True)
-        elif event == KEY_BUTTON_SCREENSHOT:
+                if values[Keys.RADIO_BTN_IMAGE_MAIN_ZOOM]:
+                    model.zoom_center = pos
+                    update_zoom_image(model)
+                    model.window[Keys.COLUMN_ZOOM].update(visible=True)
+                elif values[Keys.RADIO_BTN_IMAGE_MAIN_TAP]:
+                    send_tap_action(pos, model, worker, connector)
+        elif event == Keys.BUTTON_SCREENSHOT:
             capture_screenshot_action(model, worker, connector)
-        elif event == KEY_BUTTON_ZOOM_FRM_CLOSE:
-            model.zoom_column.update(visible=False)
-        elif event == KEY_SLIDER_ZOOM:
-            model.zoom_radius = values[KEY_SLIDER_ZOOM]
+        elif event == Keys.BUTTON_ZOOM_CLOSE:
+            model.window[Keys.COLUMN_ZOOM].update(visible=False)
+        elif event == Keys.SLIDER_ZOOM:
+            model.zoom_radius = values[Keys.SLIDER_ZOOM]
             update_zoom_image(model)
+        elif event == Keys.BUTTON_RECORD:
+            if model.recording:
+                # not sent to background worker because we want to abort the current action
+                model.recording_stopped = True
+                connector.abort_listening()
+            else:
+                record_events_action(model, worker, connector)
 
     window.close()
 

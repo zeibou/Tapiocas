@@ -215,11 +215,15 @@ class AdbConnector:
         all_processes = self._shell(f"{CMD_WINDOWS_DUMP} | grep -i {process_name} | grep -i mcurrentfocus")
         return len(all_processes) > 0
 
-    # todo: needs PR merged in adb_shell module
     def listen(self):
         self._connect()
         for line in self._device.streaming_shell(CMD_GET_EVENT):
-            logger.debug(line)
+            yield line
+
+    # no way currently to pass an exit-predicate to adb-shell to exit the stream
+    # so we just close the connection
+    def abort_listening(self):
+        self._disconnect()
 
     def _get_screen_resolution(self):
         if not self._device_resolution:
