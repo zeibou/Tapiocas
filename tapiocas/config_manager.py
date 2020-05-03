@@ -21,7 +21,6 @@ class Configuration:
     log_dir = None
     log_level = None
 
-
     def load_json(self, config_file_path, override_only=False):
         if not os.path.exists(config_file_path):
             logging.warning(f"{config_file_path} does not exist")
@@ -37,7 +36,6 @@ class Configuration:
         self._loaded = True
 
 
-
 def get_configuration(custom_file=CUSTOM_CONFIG_FILE):
     config = Configuration()
     if not config._loaded:
@@ -46,6 +44,8 @@ def get_configuration(custom_file=CUSTOM_CONFIG_FILE):
         if custom_file:
             logging.info(f"Loading custom configuration: {custom_file}")
             config.load_json(custom_file, override_only=True)
+    if not config.phone_ip:
+        raise ValueError("Phone ip should be defined")
     return config
 
 
