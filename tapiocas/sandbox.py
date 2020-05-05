@@ -1,6 +1,6 @@
 import io
 import PySimpleGUI as sg
-from PIL import Image
+from PIL import Image, ImageDraw
 import logging
 import collections
 import threading
@@ -18,6 +18,7 @@ class Keys(Enum):
     BUTTON_RECORD = auto(),
     MULTILINE_RECORD = auto(),
     BUTTON_SCREENSHOT = auto(),
+    BUTTON_SCREENSHOT_LIVE = auto(),
     IMAGE_MAIN = auto(),
     RADIO_GROUP_IMAGE_MAIN_CLICK = auto(),
     RADIO_BTN_IMAGE_MAIN_ZOOM = auto(),
@@ -34,25 +35,44 @@ DISPLAY_MAX_SIZE = (300, 600)
 SCREENSHOT_RAW = False
 SCREENSHOT_PULL = False
 
-ZOOM_RADIUS_MIN = 10
-ZOOM_RADIUS_MAX = 100
-START_COLOR = (random.randint(25, 100), random.randint(25, 100), random.randint(25, 100))
+ZOOM_LEVELS = [250, 100, 50, 25, 10]
 RECORDING_COLOR = "tan1"
 NO_RECORDING_COLOR = "lightsteelblue2"
 
 
 class Model:
-    device_screen_size: (int, int)
-    zoom_center: (int, int)
-    zoom_radius: int
-
-    recording: bool
-    recording_stopped: bool
-
-    main_image: Image
-    zoom_image = Image
-
     window: sg.Window
+
+    def __init__(self, device_screen_size):
+        self.device_screen_size = device_screen_size
+        self.zoom_center = (0, 0)
+        self.zoom_radius = 50
+        self.zoom_mode = False
+        self.recording = False
+        self.recording_stopped = False
+        self.live_screenshot = False
+        start_color = (random.randint(25, 100), random.randint(25, 100), random.randint(25, 100))
+        self.screenshot_raw = Image.new('RGB', self.device_screen_size, start_color)
+        self.screenshot_thumbnail = get_image_thumbnail(self.screenshot_raw)
+        self._screenshot_lock = threading.Lock()
+        self._screenshot_raw_new = None
+
+    # called from background thread
+    def enqueue_new_screenshot(self, img):
+        self._screenshot_lock.acquire()
+        self._screenshot_raw_new = img
+        self._screenshot_lock.release()
+
+    # called from main thread
+    def check_for_new_screenshot(self):
+        refresh = False
+        self._screenshot_lock.acquire()
+        if self._screenshot_raw_new:
+            self.screenshot_raw, self._screenshot_raw_new = self._screenshot_raw_new, None
+            self.screenshot_thumbnail = get_image_thumbnail(self.screenshot_raw)
+            refresh = True
+        self._screenshot_lock.release()
+        return refresh
 
 
 class BackgroundWorker:
@@ -78,6 +98,12 @@ class BackgroundWorker:
 
     def enqueue(self, action, *args):
         self.queue.append((action, args))
+
+
+def get_image_thumbnail(img):
+    img = img.copy()
+    img.thumbnail(DISPLAY_MAX_SIZE)
+    return img
 
 
 def get_image_bytes(img):
@@ -114,15 +140,15 @@ def capture_screenshot_action(model: Model, worker: BackgroundWorker, connector:
     def action():
         try:
             model.window[Keys.LABEL_STATUS].update("Screenshot in progress...")
-            model.main_image = connector.get_screenshot(raw=SCREENSHOT_RAW, pull=SCREENSHOT_PULL)
-            img = model.main_image.copy()
-            img.thumbnail(DISPLAY_MAX_SIZE)
-            model.window[Keys.IMAGE_MAIN].update(data=get_image_bytes(img))
-            update_zoom_image(model)
+            new_screenshot = connector.get_screenshot(raw=SCREENSHOT_RAW, pull=SCREENSHOT_PULL)
+            model.enqueue_new_screenshot(new_screenshot)
             model.window[Keys.LABEL_STATUS].update("")
         except Exception as e:
             model.window[Keys.LABEL_STATUS].update("Error")
             logging.error(e)
+        finally:
+            if model.live_screenshot:
+                capture_screenshot_action(model, worker, connector)
     worker.enqueue(action)
 
 
@@ -184,12 +210,35 @@ def display_pointer_pos_in_device_coordinates(model: Model):
         model.window[Keys.LABEL_COORD].update(value="")
 
 
+def update_main_image(model: Model):
+    img = model.screenshot_thumbnail.copy()
+    if model.zoom_mode:
+        x, y = model.zoom_center
+        zr = model.zoom_radius
+        ul = get_coordinates_on_image((x - zr, y - zr), model.device_screen_size, img.size)
+        ur = get_coordinates_on_image((x + zr, y - zr), model.device_screen_size, img.size)
+        bl = get_coordinates_on_image((x - zr, y + zr), model.device_screen_size, img.size)
+        br = get_coordinates_on_image((x + zr, y + zr), model.device_screen_size, img.size)
+        draw_square(img, (ul, ur, bl, br))
+    model.window[Keys.IMAGE_MAIN].update(data=get_image_bytes(img))
+
+
 def update_zoom_image(model: Model):
     x, y = model.zoom_center
     zr = model.zoom_radius
-    zoom = model.main_image.crop((x - zr, y - zr, x + zr, y + zr))
+    zoom = model.screenshot_raw.crop((x - zr, y - zr, x + zr, y + zr))
     zoom = zoom.resize((500, 500), resample=Image.NEAREST)
+    draw_square(zoom, ((0, 0), (499, 0), (0, 499), (499, 499)))
     model.window[Keys.IMAGE_ZOOM].update(data=get_image_bytes(zoom))
+
+
+def draw_square(img, square_coordinates, fill=(240, 50, 50, 240)):
+    draw = ImageDraw.Draw(img)
+    ul, ur, bl, br = square_coordinates
+    draw.line(ul + ur, fill=fill)
+    draw.line(ul + bl, fill=fill)
+    draw.line(bl + br, fill=fill)
+    draw.line(ur + br, fill=fill)
 
 
 def layout_col_action_panel():
@@ -201,19 +250,17 @@ def layout_col_action_panel():
 
 def layout_col_main_image_menu():
     screenshot_btn = sg.B("Get Screenshot", key=Keys.BUTTON_SCREENSHOT, size=(30, 1))
+    live_btn = sg.Checkbox("Live", key=Keys.BUTTON_SCREENSHOT_LIVE, enable_events=True, size=(10, 1))
     status_label_element = sg.T("", size=(40, 1), key=Keys.LABEL_STATUS)
     r1 = sg.Radio("Zoom on click", key=Keys.RADIO_BTN_IMAGE_MAIN_ZOOM, group_id=Keys.RADIO_GROUP_IMAGE_MAIN_CLICK, default=True)
     r2 = sg.Radio("Tap on click", key=Keys.RADIO_BTN_IMAGE_MAIN_TAP, group_id=Keys.RADIO_GROUP_IMAGE_MAIN_CLICK)
-    col = sg.Column(layout=[[status_label_element], [r1, r2], [screenshot_btn]])
+    col = sg.Column(layout=[[status_label_element], [r1, r2], [screenshot_btn, live_btn]])
     return col
 
 
 def layout_col_main_image(model: Model):
     coord_label_element = sg.Text(size=(30, 1), justification='center', key=Keys.LABEL_COORD)
-    model.main_image = Image.new('RGB', model.device_screen_size, START_COLOR)
-    img = model.main_image.copy()
-    img.thumbnail(DISPLAY_MAX_SIZE)
-    main_image_element = sg.Image(data=get_image_bytes(img),
+    main_image_element = sg.Image(data=get_image_bytes(model.screenshot_thumbnail),
                                         enable_events=True,
                                         key=Keys.IMAGE_MAIN)
     col = sg.Column(layout=[[layout_col_main_image_menu()], [main_image_element], [coord_label_element]],
@@ -221,16 +268,17 @@ def layout_col_main_image(model: Model):
     return col
 
 
-def layout_col_zoom_image(model: Model):
-    model.zoom_image = Image.new('RGB', (500, 500), START_COLOR)
-    zoom_image_element = sg.Image(data=get_image_bytes(model.zoom_image),
+def layout_col_zoom_image():
+    zoom_image = Image.new('RGB', (500, 500), (0, 0, 0))
+    zoom_image_element = sg.Image(data=get_image_bytes(zoom_image),
                                         enable_events=True,
                                         key=Keys.IMAGE_ZOOM)
     close_button = sg.B("Close", key=Keys.BUTTON_ZOOM_CLOSE)
-    zoom_slider = sg.Slider(default_value=50, range=(ZOOM_RADIUS_MIN, ZOOM_RADIUS_MAX), disable_number_display=True,
-                            orientation='h', resolution=10, enable_events=True, key=Keys.SLIDER_ZOOM)
-    col = sg.Column(layout=[[zoom_slider, close_button],
-                            [zoom_image_element]],
+    zoom_slider = sg.Slider(default_value=2, range=(0, len(ZOOM_LEVELS) - 1), disable_number_display=True,
+                            orientation='h', resolution=1, enable_events=True, size=(50, 20), key=Keys.SLIDER_ZOOM)
+    col = sg.Column(layout=[[sg.T(f"x{250 // ZOOM_LEVELS[0]}"), zoom_slider, sg.T(f"x{250 // ZOOM_LEVELS[-1]}")],
+                            [zoom_image_element],
+                            [close_button]],
                            key=Keys.COLUMN_ZOOM,
                            visible=False,
                            element_justification='center')
@@ -238,26 +286,28 @@ def layout_col_zoom_image(model: Model):
 
 
 def main():
-    model = Model()
     worker = BackgroundWorker()
 
     logging.info(f"Connecting to device {config.phone_ip}")
     connector = AdbConnector(ip=config.phone_ip, adbkey_path=config.adbkey_path, output_dir=config.output_dir)
     width, height = connector.screen_width(), connector.screen_height()
     logging.info(f"Device screen size is {width} x {height}")
-    model.device_screen_size = (width, height)
-    model.zoom_center = (0, 0)
-    model.zoom_radius = 50
-    model.recording = False
+    model = Model((width, height))
 
     layout = [
-        [layout_col_action_panel(), layout_col_main_image(model), layout_col_zoom_image(model)]
+        [layout_col_action_panel(), layout_col_main_image(model), layout_col_zoom_image()]
     ]
     window = sg.Window("Tapiocas' Sandbox", layout)
     model.window = window
 
     while True:
         event, values = window.read(timeout=100)
+        new_screenshot = model.check_for_new_screenshot()
+        if new_screenshot:
+            update_main_image(model)
+            if model.zoom_mode:
+                update_zoom_image(model)
+
         if event == sg.TIMEOUT_KEY:
             display_pointer_pos_in_device_coordinates(model)
         elif event in (None, 'Exit'):
@@ -266,17 +316,24 @@ def main():
             pos = get_pointer_pos_in_device_coordinates(model)
             if pos:
                 if values[Keys.RADIO_BTN_IMAGE_MAIN_ZOOM]:
+                    model.zoom_mode = True
                     model.zoom_center = pos
+                    update_main_image(model)
                     update_zoom_image(model)
                     model.window[Keys.COLUMN_ZOOM].update(visible=True)
                 elif values[Keys.RADIO_BTN_IMAGE_MAIN_TAP]:
                     send_tap_action(pos, model, worker, connector)
         elif event == Keys.BUTTON_SCREENSHOT:
             capture_screenshot_action(model, worker, connector)
+        elif event == Keys.BUTTON_SCREENSHOT_LIVE:
+            model.live_screenshot = values[Keys.BUTTON_SCREENSHOT_LIVE]
         elif event == Keys.BUTTON_ZOOM_CLOSE:
+            model.zoom_mode = False
             model.window[Keys.COLUMN_ZOOM].update(visible=False)
+            update_main_image(model)
         elif event == Keys.SLIDER_ZOOM:
-            model.zoom_radius = values[Keys.SLIDER_ZOOM]
+            model.zoom_radius = ZOOM_LEVELS[int(values[Keys.SLIDER_ZOOM])]
+            update_main_image(model)
             update_zoom_image(model)
         elif event == Keys.BUTTON_RECORD:
             if model.recording:
