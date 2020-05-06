@@ -4,6 +4,8 @@ import time
 import re
 import tempfile
 from PIL import Image
+import cv2
+import numpy as np
 import argparse
 import logging
 from datetime import datetime
@@ -238,14 +240,23 @@ class AdbConnector:
     def screen_height(self):
         return self._get_screen_resolution()[1]
 
-    def get_screenshot(self, raw=False, pull=True) -> Image:
+    def get_screenshot_pil(self, raw=False, pull=True) -> Image:
         if pull:
             if raw:
-                return self._get_screenshot_raw_pull_file()
-            return self._get_screenshot_png_pull_file()
+                return self._get_screenshot_raw_pull_file_pil()
+            return self._get_screenshot_png_pull_file_pil()
         if raw:
-                return self._get_screenshot_raw_stream()
-        return self._get_screenshot_png_stream()
+                return self._get_screenshot_raw_stream_pil()
+        return self._get_screenshot_png_stream_pil()
+
+    def get_screenshot_opencv(self, raw=False, pull=True) -> np.ndarray:
+        if pull:
+            if raw:
+                return self._get_screenshot_raw_pull_file_opencv()
+            return self._get_screenshot_png_pull_file_opencv()
+        if raw:
+                return self._get_screenshot_raw_stream_opencv()
+        return self._get_screenshot_png_stream_opencv()
 
     @staticmethod
     def get_temp_remote_filepath(extension):
@@ -257,7 +268,54 @@ class AdbConnector:
             os.mkdir(self.output_dir)
         return os.path.realpath(f"{self.output_dir}/screenshot.{extension}")
 
-    def _get_screenshot_png_pull_file(self) -> Image:
+    def _raw_to_pil(self, raw) -> Image:
+        return Image.frombuffer('RGBA', (self.screen_width(), self.screen_height()), raw[12:], 'raw', 'RGBX', 0, 1)
+
+    def _raw_to_opencv(self, raw) -> np.ndarray:
+        array = np.frombuffer(raw[16:], np.uint8)
+        rgb_image = array.reshape((self.screen_height(), self.screen_width(), 4))
+        # open_cv works with BGRA images
+        bgr_image = cv2.cvtColor(rgb_image,cv2.COLOR_RGB2BGR)
+        return bgr_image
+
+    def _get_screenshot_png_pull_file_pil(self) -> Image:
+        png_local_filepath = self._get_screenshot_png_pull_file()
+        return Image.open(png_local_filepath)
+
+    def _get_screenshot_png_pull_file_opencv(self) -> np.ndarray:
+        png_local_filepath = self._get_screenshot_png_pull_file()
+        return cv2.imread(png_local_filepath)
+
+    def _get_screenshot_raw_pull_file_pil(self):
+        raw_local_filepath = self._get_screenshot_raw_pull_file()
+        with open(raw_local_filepath, 'rb') as f:
+            raw = f.read()
+        return self._raw_to_pil(raw)
+
+    def _get_screenshot_raw_pull_file_opencv(self):
+        raw_local_filepath = self._get_screenshot_raw_pull_file()
+        with open(raw_local_filepath, 'rb') as f:
+            raw = f.read()
+        return self._raw_to_opencv(raw)
+
+    def _get_screenshot_png_stream_pil(self) -> Image:
+        stream = self._get_screenshot_png_stream()
+        return Image.open(io.BytesIO(stream))
+
+    def _get_screenshot_png_stream_opencv(self) -> np.ndarray:
+        stream = self._get_screenshot_png_stream()
+        array = np.frombuffer(stream, np.uint8)
+        return cv2.imdecode(array, cv2.IMREAD_COLOR)
+
+    def _get_screenshot_raw_stream_pil(self) -> Image:
+        stream = self._get_screenshot_raw_stream()
+        return self._raw_to_pil(stream)
+
+    def _get_screenshot_raw_stream_opencv(self) -> np.ndarray:
+        stream = self._get_screenshot_raw_stream()
+        return self._raw_to_opencv(stream)
+
+    def _get_screenshot_png_pull_file(self) -> str:
         self._connect()
         png_remote_filepath = self.get_temp_remote_filepath("png")
         png_local_filepath = self.get_temp_local_filepath("png")
@@ -271,9 +329,9 @@ class AdbConnector:
         self._shell(f"rm {png_remote_filepath}")
         start, end = end, time.perf_counter()
         logging.debug(f"remote image deleted in {end-start:.2f} seconds")
-        return Image.open(png_local_filepath)
+        return png_local_filepath
 
-    def _get_screenshot_raw_pull_file(self) -> Image:
+    def _get_screenshot_raw_pull_file(self) -> str:
         self._connect()
         raw_remote_filepath = self.get_temp_remote_filepath("raw")
         raw_local_filepath = self.get_temp_local_filepath("raw")
@@ -287,23 +345,19 @@ class AdbConnector:
         self._shell(f"rm {raw_remote_filepath}")
         start, end = end, time.perf_counter()
         logging.debug(f"remote image deleted in {end-start:.2f} seconds")
-        with open(raw_local_filepath, 'rb') as f:
-            raw = f.read()
-        return Image.frombuffer('RGBA', (self.screen_width(), self.screen_height()), raw[12:], 'raw', 'RGBX', 0, 1)
+        return raw_local_filepath
 
     # todo: use exec-out instead of shell, because sometimes shell + no-decoding seems to be missing some bytes
-    def _get_screenshot_png_stream(self) -> Image:
+    def _get_screenshot_png_stream(self):
         self._connect()
         raw = self._shell(CMD_SCREENSHOT_PNG, decode=False)
-        image = Image.open(io.BytesIO(raw))
-        return image
+        return raw
 
     # todo: use exec-out instead of shell, because sometimes shell + no-decoding seems to be missing some bytes
-    def _get_screenshot_raw_stream(self) -> Image:
+    def _get_screenshot_raw_stream(self):
         self._connect()
         raw = self._shell(CMD_SCREENSHOT_RAW, decode=False)
-        image = Image.frombuffer('RGBA', (self.screen_width(), self.screen_height()), raw[12:], 'raw', 'RGBX', 0, 1)
-        return image
+        return raw
 
 
 def run(config: config_manager.Configuration):
@@ -324,16 +378,24 @@ def run(config: config_manager.Configuration):
     on complex images, raw screenshot will be way faster than png screenshot
     but on wifi connection (through home router), pulling the data is very slow, 
     and raw image pull takes way longer than png image pull (because more data)
-    Therefore png still seems to bethe better choice for wifi, 
+    Therefore png still seems to be the better choice for wifi, 
     but raw could be faster once adb-shell has usb connection implemented
     """
     for raw in (False, True):
         for pull in (False, True):
             start = time.perf_counter()
-            image = connector.get_screenshot(raw=raw, pull=pull)
+            image = connector.get_screenshot_pil(raw=raw, pull=pull)
             end = time.perf_counter()
             logging.info(f"image [raw={raw} pull={pull}] captured in {end-start:.2f} seconds")
-    image.show()
+            image.show()
+    for raw in (False, True):
+        for pull in (False, True):
+            start = time.perf_counter()
+            image = connector.get_screenshot_opencv(raw=raw, pull=pull)
+            end = time.perf_counter()
+            logging.info(f"image [raw={raw} pull={pull}] captured in {end-start:.2f} seconds")
+            cv2.imshow(f"image [raw={raw} pull={pull}]", image)
+            cv2.waitKey(5_000)
 
 
 if __name__ == "__main__":
