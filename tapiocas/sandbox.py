@@ -1,6 +1,9 @@
 import io
 import PySimpleGUI as sg
 from PIL import Image, ImageDraw
+import cv2
+import numpy as np
+import imutils
 import logging
 import collections
 import threading
@@ -45,14 +48,16 @@ class Model:
 
     def __init__(self, device_screen_size):
         self.device_screen_size = device_screen_size
-        self.zoom_center = (0, 0)
-        self.zoom_radius = 50
+        self.__zc = (0, 0)
+        self.__zr = 50
         self.zoom_mode = False
         self.recording = False
         self.recording_stopped = False
         self.live_screenshot = False
         start_color = (random.randint(25, 100), random.randint(25, 100), random.randint(25, 100))
-        self.screenshot_raw = Image.new('RGB', self.device_screen_size, start_color)
+        start_image = np.zeros((device_screen_size[1], device_screen_size[0], 3), np.uint8)
+        start_image[:] = start_color
+        self.screenshot_raw = start_image
         self.screenshot_thumbnail = get_image_thumbnail(self.screenshot_raw)
         self._screenshot_lock = threading.Lock()
         self._screenshot_raw_new = None
@@ -67,12 +72,37 @@ class Model:
     def check_for_new_screenshot(self):
         refresh = False
         self._screenshot_lock.acquire()
-        if self._screenshot_raw_new:
+        if self._screenshot_raw_new is not None:
             self.screenshot_raw, self._screenshot_raw_new = self._screenshot_raw_new, None
             self.screenshot_thumbnail = get_image_thumbnail(self.screenshot_raw)
             refresh = True
         self._screenshot_lock.release()
         return refresh
+
+    @property
+    def zoom_center(self):
+        return self.__zc
+
+    @zoom_center.setter
+    def zoom_center(self, zc):
+        self.__zc = zc
+        self._zoom_center_check()
+
+    @property
+    def zoom_radius(self):
+        return self.__zr
+
+    @zoom_radius.setter
+    def zoom_radius(self, zr):
+        self.__zr = zr
+        self._zoom_center_check()
+
+    def _zoom_center_check(self):
+        zx, zy = self.zoom_center
+        zr = self.zoom_radius
+        zx = min(max(zx, zr), self.device_screen_size[0]-zr-1)
+        zy = min(max(zy, zr), self.device_screen_size[1]-zr-1)
+        self.__zc = (zx, zy)
 
 
 class BackgroundWorker:
@@ -101,15 +131,12 @@ class BackgroundWorker:
 
 
 def get_image_thumbnail(img):
-    img = img.copy()
-    img.thumbnail(DISPLAY_MAX_SIZE)
-    return img
+    thumbnail = cv2.resize(img, DISPLAY_MAX_SIZE, interpolation=cv2.INTER_AREA)
+    return thumbnail
 
 
 def get_image_bytes(img):
-    bio = io.BytesIO()
-    img.save(bio, 'PNG')
-    return bio.getvalue()
+    return cv2.imencode('.png', img)[1].tobytes()
 
 
 def get_image_size(image_element: sg.Image):
@@ -140,7 +167,7 @@ def capture_screenshot_action(model: Model, worker: BackgroundWorker, connector:
     def action():
         try:
             model.window[Keys.LABEL_STATUS].update("Screenshot in progress...")
-            new_screenshot = connector.get_screenshot(raw=SCREENSHOT_RAW, pull=SCREENSHOT_PULL)
+            new_screenshot = connector.get_screenshot_opencv(raw=SCREENSHOT_RAW, pull=SCREENSHOT_PULL)
             model.enqueue_new_screenshot(new_screenshot)
             model.window[Keys.LABEL_STATUS].update("")
         except Exception as e:
@@ -215,30 +242,20 @@ def update_main_image(model: Model):
     if model.zoom_mode:
         x, y = model.zoom_center
         zr = model.zoom_radius
-        ul = get_coordinates_on_image((x - zr, y - zr), model.device_screen_size, img.size)
-        ur = get_coordinates_on_image((x + zr, y - zr), model.device_screen_size, img.size)
-        bl = get_coordinates_on_image((x - zr, y + zr), model.device_screen_size, img.size)
-        br = get_coordinates_on_image((x + zr, y + zr), model.device_screen_size, img.size)
-        draw_square(img, (ul, ur, bl, br))
+        h, w, _ = img.shape
+        ul = get_coordinates_on_image((x - zr, y - zr), model.device_screen_size, (w, h))
+        br = get_coordinates_on_image((x + zr, y + zr), model.device_screen_size, (w, h))
+        cv2.rectangle(img, ul, br, (50, 50, 240, 240))
     model.window[Keys.IMAGE_MAIN].update(data=get_image_bytes(img))
 
 
 def update_zoom_image(model: Model):
     x, y = model.zoom_center
     zr = model.zoom_radius
-    zoom = model.screenshot_raw.crop((x - zr, y - zr, x + zr, y + zr))
-    zoom = zoom.resize((500, 500), resample=Image.NEAREST)
-    draw_square(zoom, ((0, 0), (499, 0), (0, 499), (499, 499)))
+    zoom = model.screenshot_raw[y - zr:y + zr, x - zr:x + zr]
+    zoom = cv2.resize(zoom, (500, 500), interpolation=cv2.INTER_NEAREST)
+    cv2.rectangle(zoom, (0, 0), (499, 499), (50, 50, 240, 240))
     model.window[Keys.IMAGE_ZOOM].update(data=get_image_bytes(zoom))
-
-
-def draw_square(img, square_coordinates, fill=(240, 50, 50, 240)):
-    draw = ImageDraw.Draw(img)
-    ul, ur, bl, br = square_coordinates
-    draw.line(ul + ur, fill=fill)
-    draw.line(ul + bl, fill=fill)
-    draw.line(bl + br, fill=fill)
-    draw.line(ur + br, fill=fill)
 
 
 def layout_col_action_panel():
@@ -269,7 +286,7 @@ def layout_col_main_image(model: Model):
 
 
 def layout_col_zoom_image():
-    zoom_image = Image.new('RGB', (500, 500), (0, 0, 0))
+    zoom_image = np.zeros((500, 500, 3), np.uint8)
     zoom_image_element = sg.Image(data=get_image_bytes(zoom_image),
                                         enable_events=True,
                                         key=Keys.IMAGE_ZOOM)
