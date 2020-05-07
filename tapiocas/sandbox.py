@@ -48,8 +48,8 @@ class Model:
 
     def __init__(self, device_screen_size):
         self.device_screen_size = device_screen_size
-        self.__zc = (0, 0)
-        self.__zr = 50
+        self.zoom_center = (0, 0)
+        self.zoom_radius = 50
         self.zoom_mode = False
         self.recording = False
         self.recording_stopped = False
@@ -80,29 +80,14 @@ class Model:
         return refresh
 
     @property
-    def zoom_center(self):
-        return self.__zc
-
-    @zoom_center.setter
-    def zoom_center(self, zc):
-        self.__zc = zc
-        self._zoom_center_check()
-
-    @property
-    def zoom_radius(self):
-        return self.__zr
-
-    @zoom_radius.setter
-    def zoom_radius(self, zr):
-        self.__zr = zr
-        self._zoom_center_check()
-
-    def _zoom_center_check(self):
+    def zoom_rectangle(self):
+        # returns upper left and lower right points of zoom rectangle
         zx, zy = self.zoom_center
         zr = self.zoom_radius
-        zx = min(max(zx, zr), self.device_screen_size[0]-zr-1)
-        zy = min(max(zy, zr), self.device_screen_size[1]-zr-1)
-        self.__zc = (zx, zy)
+        # adjust center to stay inside image
+        zx = min(max(zx, zr), self.device_screen_size[0] - zr - 1)
+        zy = min(max(zy, zr), self.device_screen_size[1] - zr - 1)
+        return (zx - zr, zy - zr), (zx + zr, zy + zr)
 
 
 class BackgroundWorker:
@@ -222,9 +207,10 @@ def get_pointer_pos_in_device_coordinates(model: Model):
     else:
         pos = get_pointer_position_on_image(model.window[Keys.IMAGE_ZOOM])
         if pos:
-            zoom_diameter = int(model.zoom_radius * 2)
+            ul, br = model.zoom_rectangle
+            zoom_diameter = br[0] - ul[0]
             x, y = get_coordinates_on_image(pos, get_image_size(model.window[Keys.IMAGE_ZOOM]), (zoom_diameter, zoom_diameter))
-            return x + model.zoom_center[0] - model.zoom_radius, y + model.zoom_center[1] - model.zoom_radius
+            return x + ul[0], y + ul[1]
 
 
 def display_pointer_pos_in_device_coordinates(model: Model):
@@ -239,19 +225,17 @@ def display_pointer_pos_in_device_coordinates(model: Model):
 def update_main_image(model: Model):
     img = model.screenshot_thumbnail.copy()
     if model.zoom_mode:
-        x, y = model.zoom_center
-        zr = model.zoom_radius
-        h, w, _ = img.shape
-        ul = get_coordinates_on_image((x - zr, y - zr), model.device_screen_size, (w, h))
-        br = get_coordinates_on_image((x + zr, y + zr), model.device_screen_size, (w, h))
+        ul, br = model.zoom_rectangle
+        h, w = img.shape[:2]
+        ul = get_coordinates_on_image(ul, model.device_screen_size, (w, h))
+        br = get_coordinates_on_image(br, model.device_screen_size, (w, h))
         cv2.rectangle(img, ul, br, (50, 50, 240, 240))
     model.window[Keys.IMAGE_MAIN].update(data=get_image_bytes(img))
 
 
 def update_zoom_image(model: Model):
-    x, y = model.zoom_center
-    zr = model.zoom_radius
-    zoom = model.screenshot_raw[y - zr:y + zr, x - zr:x + zr]
+    ul, br = model.zoom_rectangle
+    zoom = model.screenshot_raw[ul[1]:br[1], ul[0]:br[0]]
     zoom = cv2.resize(zoom, (500, 500), interpolation=cv2.INTER_NEAREST)
     cv2.rectangle(zoom, (0, 0), (499, 499), (50, 50, 240, 240))
     model.window[Keys.IMAGE_ZOOM].update(data=get_image_bytes(zoom))
