@@ -170,12 +170,11 @@ def capture_screenshot_action(model: Model, worker: BackgroundWorker, connector:
             new_screenshot = connector.get_screenshot_opencv(raw=SCREENSHOT_RAW, pull=SCREENSHOT_PULL)
             model.enqueue_new_screenshot(new_screenshot)
             model.window[Keys.LABEL_STATUS].update("")
+            if model.live_screenshot:
+                capture_screenshot_action(model, worker, connector)
         except Exception as e:
             model.window[Keys.LABEL_STATUS].update("Error")
             logging.error(e)
-        finally:
-            if model.live_screenshot:
-                capture_screenshot_action(model, worker, connector)
     worker.enqueue(action)
 
 
