@@ -14,6 +14,7 @@ from enum import Enum, unique, auto
 from adb_connector import AdbConnector
 import config_manager
 import log_manager
+import image_filters as filters
 
 
 @unique
@@ -32,6 +33,12 @@ class Keys(Enum):
     COLUMN_ZOOM = auto(),
     LABEL_STATUS = auto(),
     LABEL_COORD = auto(),
+    LIST_FILTERS_LIBRARY = auto(),
+    LIST_FILTERS_SELECTED = auto(),
+    BUTTON_FILTER_ADD = auto(),
+    BUTTON_FILTER_REMOVE = auto(),
+    INPUT_FILTER_VALUE = auto(),
+    BUTTON_FILTER_APPLY = auto(),
 
 
 DISPLAY_MAX_SIZE = (300, 600)
@@ -41,6 +48,12 @@ SCREENSHOT_PULL = False
 ZOOM_LEVELS = [250, 112, 50, 22, 10]
 RECORDING_COLOR = "tan1"
 NO_RECORDING_COLOR = "lightsteelblue2"
+
+IMAGE_FILTERS = {f.name(): f for f in [
+    filters.GrayFilter,
+    filters.BlurFilter,
+    filters.CannyContourFilter,
+]}
 
 
 class Model:
@@ -61,6 +74,8 @@ class Model:
         self.screenshot_thumbnail = get_image_thumbnail(self.screenshot_raw)
         self._screenshot_lock = threading.Lock()
         self._screenshot_raw_new = None
+        self.filters = []
+        self.apply_filters = True
 
     # called from background thread
     def enqueue_new_screenshot(self, img):
@@ -224,6 +239,8 @@ def display_pointer_pos_in_device_coordinates(model: Model):
 
 def update_main_image(model: Model):
     img = model.screenshot_thumbnail.copy()
+    img = apply_filters(model, img)
+
     if model.zoom_mode:
         ul, br = model.zoom_rectangle
         h, w = img.shape[:2]
@@ -236,9 +253,35 @@ def update_main_image(model: Model):
 def update_zoom_image(model: Model):
     ul, br = model.zoom_rectangle
     zoom = model.screenshot_raw[ul[1]:br[1], ul[0]:br[0]]
+    zoom = apply_filters(model, zoom)
     zoom = cv2.resize(zoom, (500, 500), interpolation=cv2.INTER_NEAREST)
     cv2.rectangle(zoom, (0, 0), (499, 499), (50, 50, 240, 240))
     model.window[Keys.IMAGE_ZOOM].update(data=get_image_bytes(zoom))
+
+
+def apply_filters(model: Model, image):
+    if model.apply_filters:
+        for f in model.filters:
+            image = f.apply(image)
+    return image
+
+
+def layout_controls_tab_container(model: Model):
+    filters_tab = sg.Tab('Image Filters', [[layout_col_filters_panel(model)]])
+    recording_tab = sg.Tab('Events Recording', [[layout_col_action_panel()]])
+    tab_group_layout = [[filters_tab, recording_tab]]
+    return sg.Column(layout=[[sg.TabGroup(layout=tab_group_layout)]])
+
+
+def layout_col_filters_panel(model: Model):
+    available_filters = sg.Listbox(list(IMAGE_FILTERS.keys()), size=(40, 5), key=Keys.LIST_FILTERS_LIBRARY)
+    applied_filters = sg.Listbox(model.filters, enable_events=True, size=(40, 5), key=Keys.LIST_FILTERS_SELECTED)
+    add_button = sg.Button("Add", key=Keys.BUTTON_FILTER_ADD, size=(25, 1))
+    apply_button = sg.Button("Apply", key=Keys.BUTTON_FILTER_APPLY, size=(10, 1))
+    remove_button = sg.Button("Remove", key=Keys.BUTTON_FILTER_REMOVE, size=(25, 1))
+    value_input = sg.Input(key=Keys.INPUT_FILTER_VALUE, size=(12, 1))
+    return sg.Column([[available_filters, add_button],
+                      [applied_filters, sg.Column(layout=[[value_input, apply_button], [remove_button]])]])
 
 
 def layout_col_action_panel():
@@ -295,7 +338,7 @@ def main():
     model = Model((width, height))
 
     layout = [
-        [layout_col_action_panel(), layout_col_main_image(model), layout_col_zoom_image()]
+        [layout_controls_tab_container(model), layout_col_main_image(model), layout_col_zoom_image()]
     ]
     window = sg.Window("Tapiocas' Sandbox", layout)
     model.window = window
@@ -342,6 +385,37 @@ def main():
                 connector.abort_listening()
             else:
                 record_events_action(model, worker, connector)
+        elif event == Keys.BUTTON_FILTER_ADD:
+            selected_filter = values[Keys.LIST_FILTERS_LIBRARY]
+            if selected_filter is not None and len(selected_filter) == 1:
+                if selected_filter[0] in IMAGE_FILTERS:
+                    model.filters.append(IMAGE_FILTERS[selected_filter[0]]())
+                    window[Keys.LIST_FILTERS_SELECTED].update(values=model.filters)
+                    update_main_image(model)
+                    update_zoom_image(model)
+        elif event == Keys.BUTTON_FILTER_REMOVE:
+            selected = values[Keys.LIST_FILTERS_SELECTED]
+            if selected is not None:
+                for s in selected:
+                    model.filters.remove(s)
+                window[Keys.LIST_FILTERS_SELECTED].update(values=model.filters)
+                update_main_image(model)
+                update_zoom_image(model)
+        elif event == Keys.LIST_FILTERS_SELECTED:
+            selected = values[Keys.LIST_FILTERS_SELECTED]
+            if selected is not None and len(selected) == 1:
+                value = selected[0].value
+                window[Keys.INPUT_FILTER_VALUE].update(value=value if value is not None else '')
+        elif event == Keys.BUTTON_FILTER_APPLY:
+            selected = values[Keys.LIST_FILTERS_SELECTED]
+            if selected is not None and len(selected) == 1:
+                selected[0].set_value(values[Keys.INPUT_FILTER_VALUE])
+                update_main_image(model)
+                update_zoom_image(model)
+                # needs update to refresh name, so we re-select current after widget update
+                index = window[Keys.LIST_FILTERS_SELECTED].TKListbox.curselection()
+                window[Keys.LIST_FILTERS_SELECTED].update(values=model.filters)
+                window[Keys.LIST_FILTERS_SELECTED].TKListbox.selection_set(index)
 
     window.close()
 
