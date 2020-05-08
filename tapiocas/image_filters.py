@@ -83,11 +83,10 @@ class CannyContourFilter(Filter):
     def apply(self, image):
         canny_output = cv2.Canny(image, self.value, self.value * 2)
         # Find contours
-        contours, hierarchy = cv2.findContours(canny_output, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+        contours, hierarchy = cv2.findContours(canny_output, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
         # Draw contours
         drawing = np.zeros((canny_output.shape[0], canny_output.shape[1], 3), dtype=np.uint8)
-        for i in range(len(contours)):
-            color = (255, 0, 0)
-            cv2.drawContours(drawing, contours, i, color, 1, cv2.LINE_4, hierarchy, 0)
+        color = (255, 0, 0)
+        cv2.drawContours(drawing, contours, -1, color, 1)
         return drawing
 
