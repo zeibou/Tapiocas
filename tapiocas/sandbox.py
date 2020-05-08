@@ -39,6 +39,9 @@ class Keys(Enum):
     BUTTON_FILTER_REMOVE = auto(),
     INPUT_FILTER_VALUE = auto(),
     BUTTON_FILTER_APPLY = auto(),
+    BUTTON_FILTER_DOWN = auto(),
+    BUTTON_FILTER_UP = auto(),
+    CHECKBOX_FILTER_ACTIVE = auto(),
 
 
 DISPLAY_MAX_SIZE = (300, 600)
@@ -262,7 +265,8 @@ def update_zoom_image(model: Model):
 def apply_filters(model: Model, image):
     if model.apply_filters:
         for f in model.filters:
-            image = f.apply(image)
+            if f.enabled:
+                image = f.apply(image)
     return image
 
 
@@ -274,14 +278,50 @@ def layout_controls_tab_container(model: Model):
 
 
 def layout_col_filters_panel(model: Model):
-    available_filters = sg.Listbox(list(IMAGE_FILTERS.keys()), size=(40, 5), key=Keys.LIST_FILTERS_LIBRARY)
+    available_filters = sg.Listbox(list(IMAGE_FILTERS.keys()), bind_return_key=True, size=(40, 8), key=Keys.LIST_FILTERS_LIBRARY)
     applied_filters = sg.Listbox(model.filters, enable_events=True, size=(40, 5), key=Keys.LIST_FILTERS_SELECTED)
     add_button = sg.Button("Add", key=Keys.BUTTON_FILTER_ADD, size=(25, 1))
-    apply_button = sg.Button("Apply", key=Keys.BUTTON_FILTER_APPLY, size=(10, 1))
-    remove_button = sg.Button("Remove", key=Keys.BUTTON_FILTER_REMOVE, size=(25, 1))
-    value_input = sg.Input(key=Keys.INPUT_FILTER_VALUE, size=(12, 1))
+    apply_button = sg.Button("Apply", key=Keys.BUTTON_FILTER_APPLY, size=(10, 1), disabled=True)
+    remove_button = sg.Button("Remove", key=Keys.BUTTON_FILTER_REMOVE, size=(25, 1), disabled=True)
+    value_input = sg.Input(key=Keys.INPUT_FILTER_VALUE, size=(12, 1), disabled=True)
+    down_button = sg.Button("Down", key=Keys.BUTTON_FILTER_DOWN, size=(10, 1), disabled=True)
+    up_button = sg.Button("Up", key=Keys.BUTTON_FILTER_UP, size=(10, 1), disabled=True)
+    enabled_checkbox = sg.Checkbox("Enabled", key=Keys.CHECKBOX_FILTER_ACTIVE, enable_events=True, size=(25, 1), disabled=True)
     return sg.Column([[available_filters, add_button],
-                      [applied_filters, sg.Column(layout=[[value_input, apply_button], [remove_button]])]])
+                      [applied_filters, sg.Column(layout=[[value_input, apply_button], [enabled_checkbox], [up_button, down_button], [remove_button]])]])
+
+
+def handle_image_filters_options_visibility(model: Model):
+    selected_indices = model.window[Keys.LIST_FILTERS_SELECTED].TKListbox.curselection()
+    if selected_indices is None or len(selected_indices) != 1:
+        show_value = show_apply = False
+        show_remove = show_checkbox = False
+        show_up = show_down = False
+    else:
+        selected_filter = model.filters[selected_indices[0]]
+        show_remove = show_checkbox = True
+        show_value = show_apply = selected_filter.value is not None
+        show_up = len(model.filters) > 1 and selected_filter != model.filters[0]
+        show_down = len(model.filters) > 1 and selected_filter != model.filters[-1]
+
+    model.window[Keys.INPUT_FILTER_VALUE].update(disabled=not show_value)
+    model.window[Keys.BUTTON_FILTER_APPLY].update(disabled=not show_apply)
+    model.window[Keys.BUTTON_FILTER_REMOVE].update(disabled=not show_remove)
+    model.window[Keys.BUTTON_FILTER_DOWN].update(disabled=not show_down)
+    model.window[Keys.BUTTON_FILTER_UP].update(disabled=not show_up)
+    model.window[Keys.CHECKBOX_FILTER_ACTIVE].update(disabled=not show_checkbox)
+
+
+def on_filters_changed(model: Model, refresh_buttons, refresh_listbox):
+    if refresh_buttons:
+        handle_image_filters_options_visibility(model)
+    if refresh_listbox:
+        index = model.window[Keys.LIST_FILTERS_SELECTED].TKListbox.curselection()
+        model.window[Keys.LIST_FILTERS_SELECTED].update(values=model.filters)
+        model.window[Keys.LIST_FILTERS_SELECTED].TKListbox.selection_set(index)
+
+    update_main_image(model)
+    update_zoom_image(model)
 
 
 def layout_col_action_panel():
@@ -385,37 +425,53 @@ def main():
                 connector.abort_listening()
             else:
                 record_events_action(model, worker, connector)
-        elif event == Keys.BUTTON_FILTER_ADD:
+        elif event == Keys.BUTTON_FILTER_ADD or event == Keys.LIST_FILTERS_LIBRARY:
             selected_filter = values[Keys.LIST_FILTERS_LIBRARY]
             if selected_filter is not None and len(selected_filter) == 1:
                 if selected_filter[0] in IMAGE_FILTERS:
                     model.filters.append(IMAGE_FILTERS[selected_filter[0]]())
                     window[Keys.LIST_FILTERS_SELECTED].update(values=model.filters)
-                    update_main_image(model)
-                    update_zoom_image(model)
+                    on_filters_changed(model, True, False)
         elif event == Keys.BUTTON_FILTER_REMOVE:
             selected = values[Keys.LIST_FILTERS_SELECTED]
             if selected is not None:
                 for s in selected:
                     model.filters.remove(s)
                 window[Keys.LIST_FILTERS_SELECTED].update(values=model.filters)
-                update_main_image(model)
-                update_zoom_image(model)
+                on_filters_changed(model, True, False)
         elif event == Keys.LIST_FILTERS_SELECTED:
+            handle_image_filters_options_visibility(model)
             selected = values[Keys.LIST_FILTERS_SELECTED]
             if selected is not None and len(selected) == 1:
                 value = selected[0].value
                 window[Keys.INPUT_FILTER_VALUE].update(value=value if value is not None else '')
+                window[Keys.CHECKBOX_FILTER_ACTIVE].update(value=selected[0].enabled)
         elif event == Keys.BUTTON_FILTER_APPLY:
             selected = values[Keys.LIST_FILTERS_SELECTED]
             if selected is not None and len(selected) == 1:
                 selected[0].set_value(values[Keys.INPUT_FILTER_VALUE])
-                update_main_image(model)
-                update_zoom_image(model)
-                # needs update to refresh name, so we re-select current after widget update
-                index = window[Keys.LIST_FILTERS_SELECTED].TKListbox.curselection()
+                on_filters_changed(model, False, True)
+        elif event == Keys.BUTTON_FILTER_UP:
+            index = window[Keys.LIST_FILTERS_SELECTED].TKListbox.curselection()
+            if len(index) == 1 and index[0] > 0:
+                i = index[0]
+                model.filters[i-1], model.filters[i] = model.filters[i], model.filters[i-1]
                 window[Keys.LIST_FILTERS_SELECTED].update(values=model.filters)
-                window[Keys.LIST_FILTERS_SELECTED].TKListbox.selection_set(index)
+                window[Keys.LIST_FILTERS_SELECTED].TKListbox.selection_set((i-1,))
+                on_filters_changed(model, True, False)
+        elif event == Keys.BUTTON_FILTER_DOWN:
+            index = window[Keys.LIST_FILTERS_SELECTED].TKListbox.curselection()
+            if len(index) == 1 and index[0] < len(model.filters) - 1:
+                i = index[0]
+                model.filters[i+1], model.filters[i] = model.filters[i], model.filters[i+1]
+                window[Keys.LIST_FILTERS_SELECTED].update(values=model.filters)
+                window[Keys.LIST_FILTERS_SELECTED].TKListbox.selection_set((i+1,))
+                on_filters_changed(model, True, False)
+        elif event == Keys.CHECKBOX_FILTER_ACTIVE:
+            selected = values[Keys.LIST_FILTERS_SELECTED]
+            if selected is not None and len(selected) == 1:
+                selected[0].enabled = values[Keys.CHECKBOX_FILTER_ACTIVE]
+                on_filters_changed(model, True, True)
 
     window.close()
 

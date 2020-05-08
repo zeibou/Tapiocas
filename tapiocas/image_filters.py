@@ -6,6 +6,7 @@ import cv2
 class Filter(metaclass=abc.ABCMeta):
     def __init__(self, value=None):
         self.value = value
+        self.enabled = True
 
     @staticmethod
     @abc.abstractmethod
@@ -21,10 +22,13 @@ class Filter(metaclass=abc.ABCMeta):
         pass
 
     def __str__(self):
+        value_str = ""
+        enabled_str = ""
         if self.value is not None:
-            return f"{self.name()} ({self.value})"
-        else:
-            return self.name()
+            value_str = f" ({self.value})"
+        if not self.enabled:
+            enabled_str = f" - off"
+        return f"{self.name()}{value_str}{enabled_str}"
 
 
 class GrayFilter(Filter):
