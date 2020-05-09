@@ -1,6 +1,4 @@
-import io
 import PySimpleGUI as sg
-from PIL import Image, ImageDraw
 import cv2
 import numpy as np
 import imutils
@@ -44,7 +42,7 @@ class Keys(Enum):
     CHECKBOX_FILTER_ACTIVE = auto(),
 
 
-DISPLAY_MAX_SIZE = (300, 600)
+DISPLAY_SIZE_RATIO = 4
 SCREENSHOT_RAW = False
 SCREENSHOT_PULL = False
 
@@ -92,6 +90,10 @@ class Model:
         self._screenshot_lock.acquire()
         if self._screenshot_raw_new is not None:
             self.screenshot_raw, self._screenshot_raw_new = self._screenshot_raw_new, None
+            # if we detect a change of orientation, we reverse device_size and zoom shapes
+            if self.device_screen_size[1] != self.screenshot_raw.shape[0]:
+                self.device_screen_size = self.screenshot_raw.shape[:2][::-1]
+                self.zoom_center = self.zoom_center[::-1]
             refresh = True
         self._screenshot_lock.release()
         return refresh
@@ -133,7 +135,10 @@ class BackgroundWorker:
 
 
 def get_image_thumbnail(img):
-    thumbnail = cv2.resize(img, DISPLAY_MAX_SIZE, interpolation=cv2.INTER_AREA)
+    h, w = img.shape[:2]
+    w = w // DISPLAY_SIZE_RATIO
+    h = h // DISPLAY_SIZE_RATIO
+    thumbnail = imutils.resize(img, width=w, height=h, inter=cv2.INTER_AREA)
     return thumbnail
 
 
