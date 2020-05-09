@@ -74,7 +74,7 @@ class Model:
         start_image = np.zeros((device_screen_size[1], device_screen_size[0], 3), np.uint8)
         start_image[:] = start_color
         self.screenshot_raw = start_image
-        self.screenshot_thumbnail = get_image_thumbnail(self.screenshot_raw)
+        self.screenshot_filtered = start_image
         self._screenshot_lock = threading.Lock()
         self._screenshot_raw_new = None
         self.filters = []
@@ -92,7 +92,6 @@ class Model:
         self._screenshot_lock.acquire()
         if self._screenshot_raw_new is not None:
             self.screenshot_raw, self._screenshot_raw_new = self._screenshot_raw_new, None
-            self.screenshot_thumbnail = get_image_thumbnail(self.screenshot_raw)
             refresh = True
         self._screenshot_lock.release()
         return refresh
@@ -241,8 +240,8 @@ def display_pointer_pos_in_device_coordinates(model: Model):
 
 
 def update_main_image(model: Model):
-    img = model.screenshot_thumbnail.copy()
-    img = apply_filters(model, img)
+    model.screenshot_filtered = apply_filters(model, model.screenshot_raw)
+    img = get_image_thumbnail(model.screenshot_filtered)
 
     if model.zoom_mode:
         ul, br = model.zoom_rectangle
@@ -343,7 +342,7 @@ def layout_col_main_image_menu():
 
 def layout_col_main_image(model: Model):
     coord_label_element = sg.Text(size=(30, 1), justification='center', key=Keys.LABEL_COORD)
-    main_image_element = sg.Image(data=get_image_bytes(model.screenshot_thumbnail),
+    main_image_element = sg.Image(data=get_image_bytes(get_image_thumbnail(model.screenshot_raw)),
                                         enable_events=True,
                                         key=Keys.IMAGE_MAIN)
     col = sg.Column(layout=[[layout_col_main_image_menu()], [main_image_element], [coord_label_element]],
