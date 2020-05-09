@@ -1,6 +1,6 @@
-import io
 import PySimpleGUI as sg
-from PIL import Image, ImageDraw
+import cv2
+import numpy as np
 import logging
 import collections
 import threading
@@ -11,6 +11,7 @@ from enum import Enum, unique, auto
 from adb_connector import AdbConnector
 import config_manager
 import log_manager
+import image_filters as filters
 
 
 @unique
@@ -29,15 +30,33 @@ class Keys(Enum):
     COLUMN_ZOOM = auto(),
     LABEL_STATUS = auto(),
     LABEL_COORD = auto(),
+    LIST_FILTERS_LIBRARY = auto(),
+    LIST_FILTERS_SELECTED = auto(),
+    BUTTON_FILTER_ADD = auto(),
+    BUTTON_FILTER_REMOVE = auto(),
+    INPUT_FILTER_VALUE = auto(),
+    BUTTON_FILTER_APPLY = auto(),
+    BUTTON_FILTER_DOWN = auto(),
+    BUTTON_FILTER_UP = auto(),
+    CHECKBOX_FILTER_ACTIVE = auto(),
 
 
-DISPLAY_MAX_SIZE = (300, 600)
+DISPLAY_SIZE_RATIO = 4
 SCREENSHOT_RAW = False
 SCREENSHOT_PULL = False
 
-ZOOM_LEVELS = [250, 100, 50, 25, 10]
+ZOOM_LEVELS = [250, 112, 50, 22, 10]
 RECORDING_COLOR = "tan1"
 NO_RECORDING_COLOR = "lightsteelblue2"
+
+IMAGE_FILTERS = {f.name(): f for f in [
+    filters.GrayFilter,
+    filters.BlurFilter,
+    filters.CannyFilter,
+    filters.ContourFilter,
+    filters.InvertFilter,
+    filters.ThresholdFilter,
+]}
 
 
 class Model:
@@ -52,10 +71,14 @@ class Model:
         self.recording_stopped = False
         self.live_screenshot = False
         start_color = (random.randint(25, 100), random.randint(25, 100), random.randint(25, 100))
-        self.screenshot_raw = Image.new('RGB', self.device_screen_size, start_color)
-        self.screenshot_thumbnail = get_image_thumbnail(self.screenshot_raw)
+        start_image = np.zeros((device_screen_size[1], device_screen_size[0], 3), np.uint8)
+        start_image[:] = start_color
+        self.screenshot_raw = start_image
+        self.screenshot_filtered = start_image
         self._screenshot_lock = threading.Lock()
         self._screenshot_raw_new = None
+        self.filters = []
+        self.apply_filters = True
 
     # called from background thread
     def enqueue_new_screenshot(self, img):
@@ -67,12 +90,25 @@ class Model:
     def check_for_new_screenshot(self):
         refresh = False
         self._screenshot_lock.acquire()
-        if self._screenshot_raw_new:
+        if self._screenshot_raw_new is not None:
             self.screenshot_raw, self._screenshot_raw_new = self._screenshot_raw_new, None
-            self.screenshot_thumbnail = get_image_thumbnail(self.screenshot_raw)
+            # if we detect a change of orientation, we reverse device_size and zoom shapes
+            if self.device_screen_size[1] != self.screenshot_raw.shape[0]:
+                self.device_screen_size = self.screenshot_raw.shape[:2][::-1]
+                self.zoom_center = self.zoom_center[::-1]
             refresh = True
         self._screenshot_lock.release()
         return refresh
+
+    @property
+    def zoom_rectangle(self):
+        # returns upper left and lower right points of zoom rectangle
+        zx, zy = self.zoom_center
+        zr = self.zoom_radius
+        # adjust center to stay inside image
+        zx = min(max(zx, zr), self.device_screen_size[0] - zr - 1)
+        zy = min(max(zy, zr), self.device_screen_size[1] - zr - 1)
+        return (zx - zr, zy - zr), (zx + zr, zy + zr)
 
 
 class BackgroundWorker:
@@ -101,15 +137,12 @@ class BackgroundWorker:
 
 
 def get_image_thumbnail(img):
-    img = img.copy()
-    img.thumbnail(DISPLAY_MAX_SIZE)
-    return img
+    thumbnail = cv2.resize(img, (0, 0), fx=1/DISPLAY_SIZE_RATIO, fy=1/DISPLAY_SIZE_RATIO, interpolation=cv2.INTER_AREA)
+    return thumbnail
 
 
 def get_image_bytes(img):
-    bio = io.BytesIO()
-    img.save(bio, 'PNG')
-    return bio.getvalue()
+    return cv2.imencode('.png', img)[1].tobytes()
 
 
 def get_image_size(image_element: sg.Image):
@@ -140,15 +173,14 @@ def capture_screenshot_action(model: Model, worker: BackgroundWorker, connector:
     def action():
         try:
             model.window[Keys.LABEL_STATUS].update("Screenshot in progress...")
-            new_screenshot = connector.get_screenshot(raw=SCREENSHOT_RAW, pull=SCREENSHOT_PULL)
+            new_screenshot = connector.get_screenshot_opencv(raw=SCREENSHOT_RAW, pull=SCREENSHOT_PULL)
             model.enqueue_new_screenshot(new_screenshot)
             model.window[Keys.LABEL_STATUS].update("")
+            if model.live_screenshot:
+                capture_screenshot_action(model, worker, connector)
         except Exception as e:
             model.window[Keys.LABEL_STATUS].update("Error")
             logging.error(e)
-        finally:
-            if model.live_screenshot:
-                capture_screenshot_action(model, worker, connector)
     worker.enqueue(action)
 
 
@@ -196,9 +228,10 @@ def get_pointer_pos_in_device_coordinates(model: Model):
     else:
         pos = get_pointer_position_on_image(model.window[Keys.IMAGE_ZOOM])
         if pos:
-            zoom_diameter = int(model.zoom_radius * 2)
+            ul, br = model.zoom_rectangle
+            zoom_diameter = br[0] - ul[0]
             x, y = get_coordinates_on_image(pos, get_image_size(model.window[Keys.IMAGE_ZOOM]), (zoom_diameter, zoom_diameter))
-            return x + model.zoom_center[0] - model.zoom_radius, y + model.zoom_center[1] - model.zoom_radius
+            return x + ul[0], y + ul[1]
 
 
 def display_pointer_pos_in_device_coordinates(model: Model):
@@ -211,34 +244,90 @@ def display_pointer_pos_in_device_coordinates(model: Model):
 
 
 def update_main_image(model: Model):
-    img = model.screenshot_thumbnail.copy()
+    model.screenshot_filtered = apply_filters(model, model.screenshot_raw)
+    img = get_image_thumbnail(model.screenshot_filtered)
+
     if model.zoom_mode:
-        x, y = model.zoom_center
-        zr = model.zoom_radius
-        ul = get_coordinates_on_image((x - zr, y - zr), model.device_screen_size, img.size)
-        ur = get_coordinates_on_image((x + zr, y - zr), model.device_screen_size, img.size)
-        bl = get_coordinates_on_image((x - zr, y + zr), model.device_screen_size, img.size)
-        br = get_coordinates_on_image((x + zr, y + zr), model.device_screen_size, img.size)
-        draw_square(img, (ul, ur, bl, br))
+        ul, br = model.zoom_rectangle
+        h, w = img.shape[:2]
+        ul = get_coordinates_on_image(ul, model.device_screen_size, (w, h))
+        br = get_coordinates_on_image(br, model.device_screen_size, (w, h))
+        cv2.rectangle(img, ul, br, (50, 50, 240, 240))
     model.window[Keys.IMAGE_MAIN].update(data=get_image_bytes(img))
 
 
 def update_zoom_image(model: Model):
-    x, y = model.zoom_center
-    zr = model.zoom_radius
-    zoom = model.screenshot_raw.crop((x - zr, y - zr, x + zr, y + zr))
-    zoom = zoom.resize((500, 500), resample=Image.NEAREST)
-    draw_square(zoom, ((0, 0), (499, 0), (0, 499), (499, 499)))
+    ul, br = model.zoom_rectangle
+    zoom = model.screenshot_raw[ul[1]:br[1], ul[0]:br[0]]
+    zoom = apply_filters(model, zoom)
+    zoom = cv2.resize(zoom, (500, 500), interpolation=cv2.INTER_NEAREST)
+    cv2.rectangle(zoom, (0, 0), (499, 499), (50, 50, 240, 240))
     model.window[Keys.IMAGE_ZOOM].update(data=get_image_bytes(zoom))
 
 
-def draw_square(img, square_coordinates, fill=(240, 50, 50, 240)):
-    draw = ImageDraw.Draw(img)
-    ul, ur, bl, br = square_coordinates
-    draw.line(ul + ur, fill=fill)
-    draw.line(ul + bl, fill=fill)
-    draw.line(bl + br, fill=fill)
-    draw.line(ur + br, fill=fill)
+def apply_filters(model: Model, image):
+    if model.apply_filters:
+        for f in model.filters:
+            if f.enabled:
+                try:
+                    image = f.apply(image)
+                except Exception as e:
+                    logging.error(e)
+    return image
+
+
+def layout_controls_tab_container(model: Model):
+    filters_tab = sg.Tab('Image Filters', [[layout_col_filters_panel(model)]])
+    recording_tab = sg.Tab('Events Recording', [[layout_col_action_panel()]])
+    tab_group_layout = [[filters_tab, recording_tab]]
+    return sg.Column(layout=[[sg.TabGroup(layout=tab_group_layout)]])
+
+
+def layout_col_filters_panel(model: Model):
+    available_filters = sg.Listbox(list(IMAGE_FILTERS.keys()), bind_return_key=True, size=(40, 8), key=Keys.LIST_FILTERS_LIBRARY)
+    applied_filters = sg.Listbox(model.filters, enable_events=True, size=(40, 5), key=Keys.LIST_FILTERS_SELECTED)
+    add_button = sg.Button("Add", key=Keys.BUTTON_FILTER_ADD, size=(25, 1))
+    apply_button = sg.Button("Apply", key=Keys.BUTTON_FILTER_APPLY, size=(10, 1), disabled=True)
+    remove_button = sg.Button("Remove", key=Keys.BUTTON_FILTER_REMOVE, size=(25, 1), disabled=True)
+    value_input = sg.Input(key=Keys.INPUT_FILTER_VALUE, size=(12, 1), disabled=True)
+    down_button = sg.Button("Down", key=Keys.BUTTON_FILTER_DOWN, size=(10, 1), disabled=True)
+    up_button = sg.Button("Up", key=Keys.BUTTON_FILTER_UP, size=(10, 1), disabled=True)
+    enabled_checkbox = sg.Checkbox("Enabled", key=Keys.CHECKBOX_FILTER_ACTIVE, enable_events=True, size=(25, 1), disabled=True)
+    return sg.Column([[available_filters, add_button],
+                      [applied_filters, sg.Column(layout=[[value_input, apply_button], [enabled_checkbox], [up_button, down_button], [remove_button]])]])
+
+
+def handle_image_filters_options_visibility(model: Model):
+    selected_indices = model.window[Keys.LIST_FILTERS_SELECTED].TKListbox.curselection()
+    if selected_indices is None or len(selected_indices) != 1:
+        show_value = show_apply = False
+        show_remove = show_checkbox = False
+        show_up = show_down = False
+    else:
+        selected_filter = model.filters[selected_indices[0]]
+        show_remove = show_checkbox = True
+        show_value = show_apply = selected_filter.value is not None
+        show_up = len(model.filters) > 1 and selected_filter != model.filters[0]
+        show_down = len(model.filters) > 1 and selected_filter != model.filters[-1]
+
+    model.window[Keys.INPUT_FILTER_VALUE].update(disabled=not show_value)
+    model.window[Keys.BUTTON_FILTER_APPLY].update(disabled=not show_apply)
+    model.window[Keys.BUTTON_FILTER_REMOVE].update(disabled=not show_remove)
+    model.window[Keys.BUTTON_FILTER_DOWN].update(disabled=not show_down)
+    model.window[Keys.BUTTON_FILTER_UP].update(disabled=not show_up)
+    model.window[Keys.CHECKBOX_FILTER_ACTIVE].update(disabled=not show_checkbox)
+
+
+def on_filters_changed(model: Model, refresh_buttons, refresh_listbox):
+    if refresh_buttons:
+        handle_image_filters_options_visibility(model)
+    if refresh_listbox:
+        index = model.window[Keys.LIST_FILTERS_SELECTED].TKListbox.curselection()
+        model.window[Keys.LIST_FILTERS_SELECTED].update(values=model.filters)
+        model.window[Keys.LIST_FILTERS_SELECTED].TKListbox.selection_set(index)
+
+    update_main_image(model)
+    update_zoom_image(model)
 
 
 def layout_col_action_panel():
@@ -260,7 +349,7 @@ def layout_col_main_image_menu():
 
 def layout_col_main_image(model: Model):
     coord_label_element = sg.Text(size=(30, 1), justification='center', key=Keys.LABEL_COORD)
-    main_image_element = sg.Image(data=get_image_bytes(model.screenshot_thumbnail),
+    main_image_element = sg.Image(data=get_image_bytes(get_image_thumbnail(model.screenshot_raw)),
                                         enable_events=True,
                                         key=Keys.IMAGE_MAIN)
     col = sg.Column(layout=[[layout_col_main_image_menu()], [main_image_element], [coord_label_element]],
@@ -269,7 +358,7 @@ def layout_col_main_image(model: Model):
 
 
 def layout_col_zoom_image():
-    zoom_image = Image.new('RGB', (500, 500), (0, 0, 0))
+    zoom_image = np.zeros((500, 500, 3), np.uint8)
     zoom_image_element = sg.Image(data=get_image_bytes(zoom_image),
                                         enable_events=True,
                                         key=Keys.IMAGE_ZOOM)
@@ -295,7 +384,7 @@ def main():
     model = Model((width, height))
 
     layout = [
-        [layout_col_action_panel(), layout_col_main_image(model), layout_col_zoom_image()]
+        [layout_controls_tab_container(model), layout_col_main_image(model), layout_col_zoom_image()]
     ]
     window = sg.Window("Tapiocas' Sandbox", layout)
     model.window = window
@@ -342,6 +431,53 @@ def main():
                 connector.abort_listening()
             else:
                 record_events_action(model, worker, connector)
+        elif event == Keys.BUTTON_FILTER_ADD or event == Keys.LIST_FILTERS_LIBRARY:
+            selected_filter = values[Keys.LIST_FILTERS_LIBRARY]
+            if selected_filter is not None and len(selected_filter) == 1:
+                if selected_filter[0] in IMAGE_FILTERS:
+                    model.filters.append(IMAGE_FILTERS[selected_filter[0]]())
+                    window[Keys.LIST_FILTERS_SELECTED].update(values=model.filters)
+                    on_filters_changed(model, True, False)
+        elif event == Keys.BUTTON_FILTER_REMOVE:
+            selected = values[Keys.LIST_FILTERS_SELECTED]
+            if selected is not None:
+                for s in selected:
+                    model.filters.remove(s)
+                window[Keys.LIST_FILTERS_SELECTED].update(values=model.filters)
+                on_filters_changed(model, True, False)
+        elif event == Keys.LIST_FILTERS_SELECTED:
+            handle_image_filters_options_visibility(model)
+            selected = values[Keys.LIST_FILTERS_SELECTED]
+            if selected is not None and len(selected) == 1:
+                value = selected[0].value
+                window[Keys.INPUT_FILTER_VALUE].update(value=value if value is not None else '')
+                window[Keys.CHECKBOX_FILTER_ACTIVE].update(value=selected[0].enabled)
+        elif event == Keys.BUTTON_FILTER_APPLY:
+            selected = values[Keys.LIST_FILTERS_SELECTED]
+            if selected is not None and len(selected) == 1:
+                selected[0].set_value(values[Keys.INPUT_FILTER_VALUE])
+                on_filters_changed(model, False, True)
+        elif event == Keys.BUTTON_FILTER_UP:
+            index = window[Keys.LIST_FILTERS_SELECTED].TKListbox.curselection()
+            if len(index) == 1 and index[0] > 0:
+                i = index[0]
+                model.filters[i-1], model.filters[i] = model.filters[i], model.filters[i-1]
+                window[Keys.LIST_FILTERS_SELECTED].update(values=model.filters)
+                window[Keys.LIST_FILTERS_SELECTED].TKListbox.selection_set((i-1,))
+                on_filters_changed(model, True, False)
+        elif event == Keys.BUTTON_FILTER_DOWN:
+            index = window[Keys.LIST_FILTERS_SELECTED].TKListbox.curselection()
+            if len(index) == 1 and index[0] < len(model.filters) - 1:
+                i = index[0]
+                model.filters[i+1], model.filters[i] = model.filters[i], model.filters[i+1]
+                window[Keys.LIST_FILTERS_SELECTED].update(values=model.filters)
+                window[Keys.LIST_FILTERS_SELECTED].TKListbox.selection_set((i+1,))
+                on_filters_changed(model, True, False)
+        elif event == Keys.CHECKBOX_FILTER_ACTIVE:
+            selected = values[Keys.LIST_FILTERS_SELECTED]
+            if selected is not None and len(selected) == 1:
+                selected[0].enabled = values[Keys.CHECKBOX_FILTER_ACTIVE]
+                on_filters_changed(model, True, True)
 
     window.close()
 
