@@ -52,7 +52,10 @@ NO_RECORDING_COLOR = "lightsteelblue2"
 IMAGE_FILTERS = {f.name(): f for f in [
     filters.GrayFilter,
     filters.BlurFilter,
-    filters.CannyContourFilter,
+    filters.CannyFilter,
+    filters.ContourFilter,
+    filters.InvertFilter,
+    filters.ThresholdFilter,
 ]}
 
 

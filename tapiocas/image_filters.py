@@ -27,7 +27,7 @@ class Filter(metaclass=abc.ABCMeta):
         if self.value is not None:
             value_str = f" ({self.value})"
         if not self.enabled:
-            enabled_str = f" - off"
+            enabled_str = f" - OFF"
         return f"{self.name()}{value_str}{enabled_str}"
 
 
@@ -63,30 +63,79 @@ class BlurFilter(Filter):
 
     def apply(self, image):
         area = (self.value, self.value)
-        blur = cv2.blur(image, area)
+        blur = cv2.GaussianBlur(image, area, 0)
         return blur
 
 
-class CannyContourFilter(Filter):
+class CannyFilter(Filter):
     def __init__(self):
-        super().__init__(100)
+        super().__init__(.33)
 
     @staticmethod
     def name():
-        return "CannyContour"
+        return "Canny"
 
     def set_value(self, v):
-        v = int(v)
-        if 0 <= v < 256:
+        v = float(v)
+        if 0 <= v <= 1:
             super().set_value(v)
 
     def apply(self, image):
-        canny_output = cv2.Canny(image, self.value, self.value * 2)
+        median = np.median(image)
+        lower = int(max(0, (1.0 - self.value) * median))
+        upper = int(min(255, (1.0 + self.value) * median))
+        canny_output = cv2.Canny(image, lower, upper)
+        image = cv2.cvtColor(canny_output, cv2.COLOR_GRAY2BGR)
+        return image
+
+
+class ContourFilter(Filter):
+    def __init__(self):
+        super().__init__(1)
+
+    @staticmethod
+    def name():
+        return "Draw Contours"
+
+    def set_value(self, v):
+        v = int(v)
+        if 0 < v <= 50:
+            super().set_value(v)
+
+    def apply(self, image):
         # Find contours
-        contours, hierarchy = cv2.findContours(canny_output, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        contours, hierarchy = cv2.findContours(image, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
         # Draw contours
-        drawing = np.zeros((canny_output.shape[0], canny_output.shape[1], 3), dtype=np.uint8)
+        drawing = np.zeros((image.shape[0], image.shape[1], 3), dtype=np.uint8)
         color = (255, 255, 255)
-        cv2.drawContours(drawing, contours, -1, color, 1, cv2.LINE_AA)
+        cv2.drawContours(drawing, contours, -1, color, self.value, cv2.LINE_AA)
         return drawing
 
+
+class InvertFilter(Filter):
+    @staticmethod
+    def name():
+        return "Invert Colors"
+
+    def set_value(self, v):
+        # no value needed, we keep None
+        pass
+
+    def apply(self, image):
+        return cv2.bitwise_not(image)
+
+
+class ThresholdFilter(Filter):
+    @staticmethod
+    def name():
+        return "Adaptive Threshold"
+
+    def set_value(self, v):
+        pass
+
+    def apply(self, image):
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        th = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
+        ret = cv2.cvtColor(th, cv2.COLOR_GRAY2BGR)
+        return ret
