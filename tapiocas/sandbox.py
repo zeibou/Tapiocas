@@ -266,7 +266,10 @@ def apply_filters(model: Model, image):
     if model.apply_filters:
         for f in model.filters:
             if f.enabled:
-                image = f.apply(image)
+                try:
+                    image = f.apply(image)
+                except Exception as e:
+                    logging.error(e)
     return image
 
 
