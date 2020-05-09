@@ -1,7 +1,6 @@
 import PySimpleGUI as sg
 import cv2
 import numpy as np
-import imutils
 import logging
 import collections
 import threading
@@ -135,10 +134,7 @@ class BackgroundWorker:
 
 
 def get_image_thumbnail(img):
-    h, w = img.shape[:2]
-    w = w // DISPLAY_SIZE_RATIO
-    h = h // DISPLAY_SIZE_RATIO
-    thumbnail = imutils.resize(img, width=w, height=h, inter=cv2.INTER_AREA)
+    thumbnail = cv2.resize(img, (0, 0), fx=1/DISPLAY_SIZE_RATIO, fy=1/DISPLAY_SIZE_RATIO, interpolation=cv2.INTER_AREA)
     return thumbnail
 
 

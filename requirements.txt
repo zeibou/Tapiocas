@@ -3,4 +3,3 @@ pysimplegui
 Pillow
 opencv-python
 numpy
-imutils
