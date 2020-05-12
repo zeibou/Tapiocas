@@ -229,7 +229,7 @@ def get_pointer_pos_in_device_coordinates(model: Model):
         pos = get_pointer_position_on_image(model.window[Keys.IMAGE_ZOOM])
         if pos:
             ul, br = model.zoom_rectangle
-            zoom_diameter = br[0] - ul[0]
+            zoom_diameter = br[0] + 1 - ul[0]
             x, y = get_coordinates_on_image(pos, get_image_size(model.window[Keys.IMAGE_ZOOM]), (zoom_diameter, zoom_diameter))
             return x + ul[0], y + ul[1]
 
