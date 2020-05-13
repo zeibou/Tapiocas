@@ -39,12 +39,17 @@ class Keys(Enum):
     BUTTON_FILTER_DOWN = auto(),
     BUTTON_FILTER_UP = auto(),
     CHECKBOX_FILTER_ACTIVE = auto(),
+    SPIN_CROP_TOP = auto(),
+    SPIN_CROP_LEFT = auto(),
+    SPIN_CROP_WIDTH = auto(),
+    SPIN_CROP_HEIGHT = auto(),
 
 
 DISPLAY_SIZE_RATIO = 4
 SCREENSHOT_RAW = False
 SCREENSHOT_PULL = False
 
+ZOOM_IMAGE_SIZE = 500
 ZOOM_LEVELS = [250, 112, 50, 22, 10]
 RECORDING_COLOR = "tan1"
 NO_RECORDING_COLOR = "lightsteelblue2"
@@ -64,8 +69,9 @@ class Model:
 
     def __init__(self, device_screen_size):
         self.device_screen_size = device_screen_size
-        self.zoom_center = (0, 0)
-        self.zoom_radius = 50
+        self._zoom_center = (0, 0)
+        self._zoom_width = 100
+        self._zoom_height = 100
         self.zoom_mode = False
         self.recording = False
         self.recording_stopped = False
@@ -75,10 +81,13 @@ class Model:
         start_image[:] = start_color
         self.screenshot_raw = start_image
         self.screenshot_filtered = start_image
+        self.zoom_filtered = start_image
         self._screenshot_lock = threading.Lock()
         self._screenshot_raw_new = None
         self.filters = []
         self.apply_filters = True
+        self._zoom_rectangle = None
+        self._compute_zoom_rectangle()
 
     # called from background thread
     def enqueue_new_screenshot(self, img):
@@ -94,21 +103,70 @@ class Model:
             self.screenshot_raw, self._screenshot_raw_new = self._screenshot_raw_new, None
             # if we detect a change of orientation, we reverse device_size and zoom shapes
             if self.device_screen_size[1] != self.screenshot_raw.shape[0]:
-                self.device_screen_size = self.screenshot_raw.shape[:2][::-1]
-                self.zoom_center = self.zoom_center[::-1]
+                self.orientation_changed()
             refresh = True
         self._screenshot_lock.release()
         return refresh
 
+    def orientation_changed(self):
+        self.device_screen_size = self.screenshot_raw.shape[:2][::-1]
+        self._zoom_center = self._zoom_center[::-1]
+        self._zoom_width, self._zoom_height = self._zoom_height, self._zoom_width
+        self.window[Keys.SPIN_CROP_LEFT].update(values=[i for i in range(self.device_screen_size[0])])
+        self.window[Keys.SPIN_CROP_TOP].update(values=[i for i in range(self.device_screen_size[1])])
+        self.window[Keys.SPIN_CROP_WIDTH].update(values=[i for i in range(1, self.device_screen_size[0])])
+        self.window[Keys.SPIN_CROP_HEIGHT].update(values=[i for i in range(1,  self.device_screen_size[1])])
+        self._compute_zoom_rectangle(True)
+
+    def update_zoom_center(self, center):
+        self._zoom_center = center
+        self._compute_zoom_rectangle(True)
+
+    def update_zoom_radius(self, radius):
+        # we override the current width / height
+        # todo: keep the ratio?
+        self._zoom_width = radius * 2
+        self._zoom_height = radius * 2
+        self._compute_zoom_rectangle(True)
+
+    def update_crop(self, left, top, width, height):
+        left = max(0, min(int(left), self.device_screen_size[0]-1))
+        top = max(0, min(int(top), self.device_screen_size[1]-1))
+        width = max(1, min(int(width), self.device_screen_size[0]-1))
+        height = max(1, min(int(height), self.device_screen_size[1]-1))
+        self._zoom_center = (left + (width // 2 + width % 2 - 1), top + (height // 2 + height % 2 - 1))
+        self._zoom_width = width
+        self._zoom_height = height
+        self._compute_zoom_rectangle(True)
+
+    def _compute_zoom_rectangle(self, update_spin_elements=False):
+        zx, zy = self._zoom_center
+        w, h = self._zoom_width, self._zoom_height
+        # if w or h is even, the center pixel is on the upper left side (+1 pixel on the right / bottom side)
+        # wl / wr is the number of pixel to the left / right of center, same for ht / hb
+        wl, wr = w // 2 + w % 2 - 1, w // 2
+        ht, hb = h // 2 + h % 2 - 1, h // 2
+        # adjust center to stay inside image
+        zx = min(max(zx, wl), self.device_screen_size[0] - wr - 1)
+        zy = min(max(zy, ht), self.device_screen_size[1] - hb - 1)
+        self._zoom_rectangle = (zx - wl, zy - ht), (zx + wr, zy + hb)
+        if update_spin_elements:
+            self.window[Keys.SPIN_CROP_LEFT].update(value=zx - wl)
+            self.window[Keys.SPIN_CROP_TOP].update(value=zy - ht)
+            self.window[Keys.SPIN_CROP_WIDTH].update(value=self._zoom_width)
+            self.window[Keys.SPIN_CROP_HEIGHT].update(value=self._zoom_height)
+
     @property
     def zoom_rectangle(self):
-        # returns upper left and lower right points of zoom rectangle
-        zx, zy = self.zoom_center
-        zr = self.zoom_radius
-        # adjust center to stay inside image
-        zx = min(max(zx, zr), self.device_screen_size[0] - zr - 1)
-        zy = min(max(zy, zr), self.device_screen_size[1] - zr - 1)
-        return (zx - zr, zy - zr), (zx + zr, zy + zr)
+        return self._zoom_rectangle
+
+    @property
+    def zoom_width(self):
+        return self._zoom_width
+
+    @property
+    def zoom_height(self):
+        return self._zoom_height
 
 
 class BackgroundWorker:
@@ -229,8 +287,8 @@ def get_pointer_pos_in_device_coordinates(model: Model):
         pos = get_pointer_position_on_image(model.window[Keys.IMAGE_ZOOM])
         if pos:
             ul, br = model.zoom_rectangle
-            zoom_diameter = br[0] + 1 - ul[0]
-            x, y = get_coordinates_on_image(pos, get_image_size(model.window[Keys.IMAGE_ZOOM]), (zoom_diameter, zoom_diameter))
+            w, h = model.zoom_width, model.zoom_height
+            x, y = get_coordinates_on_image(pos, get_image_size(model.window[Keys.IMAGE_ZOOM]), (w, h))
             return x + ul[0], y + ul[1]
 
 
@@ -258,10 +316,12 @@ def update_main_image(model: Model):
 
 def update_zoom_image(model: Model):
     ul, br = model.zoom_rectangle
-    zoom = model.screenshot_raw[ul[1]:br[1], ul[0]:br[0]]
-    zoom = apply_filters(model, zoom)
-    zoom = cv2.resize(zoom, (500, 500), interpolation=cv2.INTER_NEAREST)
-    cv2.rectangle(zoom, (0, 0), (499, 499), (50, 50, 240, 240))
+    model.zoom_filtered = model.screenshot_filtered[ul[1]:br[1]+1, ul[0]:br[0]+1]
+    w, h = model.zoom_width, model.zoom_height
+    r = ZOOM_IMAGE_SIZE / max(h, w)
+    h2, w2 = int(h * r), int(w * r)
+    zoom = cv2.resize(model.zoom_filtered, (w2, h2), interpolation=cv2.INTER_NEAREST)
+    cv2.rectangle(zoom, (0, 0), (w2 - 1, h2 - 1), (50, 50, 240, 240))
     model.window[Keys.IMAGE_ZOOM].update(data=get_image_bytes(zoom))
 
 
@@ -357,19 +417,38 @@ def layout_col_main_image(model: Model):
     return col
 
 
-def layout_col_zoom_image():
-    zoom_image = np.zeros((500, 500, 3), np.uint8)
+def layout_col_zoom_image(model):
+    zoom_image = np.zeros((ZOOM_IMAGE_SIZE, ZOOM_IMAGE_SIZE, 3), np.uint8)
     zoom_image_element = sg.Image(data=get_image_bytes(zoom_image),
                                         enable_events=True,
                                         key=Keys.IMAGE_ZOOM)
     close_button = sg.B("Close", key=Keys.BUTTON_ZOOM_CLOSE)
     zoom_slider = sg.Slider(default_value=2, range=(0, len(ZOOM_LEVELS) - 1), disable_number_display=True,
                             orientation='h', resolution=1, enable_events=True, size=(50, 20), key=Keys.SLIDER_ZOOM)
-    col = sg.Column(layout=[[sg.T(f"x{250 // ZOOM_LEVELS[0]}"), zoom_slider, sg.T(f"x{250 // ZOOM_LEVELS[-1]}")],
+    zoom_line = [sg.T(f"x{250 // ZOOM_LEVELS[0]}"), zoom_slider, sg.T(f"x{250 // ZOOM_LEVELS[-1]}")]
+    left_values = [i for i in range(model.device_screen_size[0])]
+    width_values = [i for i in range(1, model.device_screen_size[0])]
+    top_values = [i for i in range(model.device_screen_size[1])]
+    height_values = [i for i in range(1, model.device_screen_size[1])]
+    # should be updated when orientation changes
+    crop_line_1 = [sg.T("Left:", size=(8, 1)),
+                   sg.Spin(left_values, key=Keys.SPIN_CROP_LEFT, size=(8, 1), enable_events=True),
+                   sg.T("Width:", size=(8, 1)),
+                   sg.Spin(width_values, key=Keys.SPIN_CROP_WIDTH, size=(8, 1), enable_events=True)]
+    crop_line_2 = [sg.T("Top:", size=(8, 1)),
+                   sg.Spin(top_values, key=Keys.SPIN_CROP_TOP, size=(8, 1), enable_events=True),
+                   sg.T("Height:", size=(8, 1)),
+                   sg.Spin(height_values, key=Keys.SPIN_CROP_HEIGHT, size=(8, 1), enable_events=True)]
+
+    zoom_tab = sg.Tab('Zoom', [zoom_line])
+    crop_tab = sg.Tab('Crop', [crop_line_1, crop_line_2])
+    tab_group_layout = [[zoom_tab, crop_tab]]
+
+    col = sg.Column(layout=[[sg.TabGroup(layout=tab_group_layout)],
                             [zoom_image_element],
                             [close_button]],
                            key=Keys.COLUMN_ZOOM,
-                           visible=False,
+                           #visible=False,
                            element_justification='center')
     return col
 
@@ -384,10 +463,18 @@ def main():
     model = Model((width, height))
 
     layout = [
-        [layout_controls_tab_container(model), layout_col_main_image(model), layout_col_zoom_image()]
+        [layout_controls_tab_container(model), layout_col_main_image(model), layout_col_zoom_image(model)]
     ]
     window = sg.Window("Tapiocas' Sandbox", layout)
     model.window = window
+    # read once to initialize elements
+    window.read(timeout=1)
+
+    # update zoom to initialize crop spin elements
+    model.zoom_mode = True
+    model.update_zoom_center((width // 2, height // 2))
+    update_main_image(model)
+    update_zoom_image(model)
 
     while True:
         event, values = window.read(timeout=100)
@@ -406,7 +493,7 @@ def main():
             if pos:
                 if values[Keys.RADIO_BTN_IMAGE_MAIN_ZOOM]:
                     model.zoom_mode = True
-                    model.zoom_center = pos
+                    model.update_zoom_center(pos)
                     update_main_image(model)
                     update_zoom_image(model)
                     model.window[Keys.COLUMN_ZOOM].update(visible=True)
@@ -421,7 +508,14 @@ def main():
             model.window[Keys.COLUMN_ZOOM].update(visible=False)
             update_main_image(model)
         elif event == Keys.SLIDER_ZOOM:
-            model.zoom_radius = ZOOM_LEVELS[int(values[Keys.SLIDER_ZOOM])]
+            model.update_zoom_radius(ZOOM_LEVELS[int(values[Keys.SLIDER_ZOOM])])
+            update_main_image(model)
+            update_zoom_image(model)
+        elif event in (Keys.SPIN_CROP_LEFT, Keys.SPIN_CROP_TOP, Keys.SPIN_CROP_WIDTH, Keys.SPIN_CROP_HEIGHT):
+            model.update_crop(values[Keys.SPIN_CROP_LEFT],
+                              values[Keys.SPIN_CROP_TOP],
+                              values[Keys.SPIN_CROP_WIDTH],
+                              values[Keys.SPIN_CROP_HEIGHT])
             update_main_image(model)
             update_zoom_image(model)
         elif event == Keys.BUTTON_RECORD:
