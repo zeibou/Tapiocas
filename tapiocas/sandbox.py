@@ -5,7 +5,6 @@ import logging
 import collections
 import threading
 import time
-import random
 from enum import Enum, unique, auto
 
 from adb_connector import AdbConnector
@@ -188,7 +187,7 @@ class BackgroundWorker:
                 try:
                     action(*args)
                 except Exception as e:
-                    logging.error(e)
+                    logging.exception(e)
 
             else:
                 time.sleep(.05)
@@ -242,7 +241,7 @@ def capture_screenshot_action(model: Model, worker: BackgroundWorker, connector:
                 capture_screenshot_action(model, worker, connector)
         except Exception as e:
             model.window[Keys.LABEL_STATUS].update("Error")
-            logging.error(e)
+            logging.exception(e)
     worker.enqueue(action)
 
 
@@ -254,7 +253,7 @@ def send_tap_action(coords, model: Model, worker: BackgroundWorker, connector: A
             model.window[Keys.LABEL_STATUS].update("")
         except Exception as e:
             model.window[Keys.LABEL_STATUS].update("Error")
-            logging.error(e)
+            logging.exception(e)
     worker.enqueue(action)
 
 
@@ -275,7 +274,7 @@ def record_events_action(model: Model, worker: BackgroundWorker, connector: AdbC
                 model.window[Keys.LABEL_STATUS].update("")
             else:
                 model.window[Keys.LABEL_STATUS].update("Error")
-                logging.error(e)
+                logging.exception(e)
         finally:
             model.recording = False
             model.window[Keys.BUTTON_RECORD].update(text="Record events")
@@ -336,7 +335,7 @@ def apply_filters(model: Model, image):
                 try:
                     image = f.apply(image)
                 except Exception as e:
-                    logging.error(e)
+                    logging.exception(e)
     return image
 
 
