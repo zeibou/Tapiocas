@@ -39,6 +39,7 @@ class Keys(Enum):
     BUTTON_FILTER_DOWN = auto(),
     BUTTON_FILTER_UP = auto(),
     CHECKBOX_FILTER_ACTIVE = auto(),
+    CHECKBOX_ALL_FILTER_ACTIVE = auto(),
     SPIN_CROP_TOP = auto(),
     SPIN_CROP_LEFT = auto(),
     SPIN_CROP_WIDTH = auto(),
@@ -406,7 +407,8 @@ def layout_col_main_image_menu():
     status_label_element = sg.T("", size=(40, 1), key=Keys.LABEL_STATUS)
     r1 = sg.Radio("Zoom on click", key=Keys.RADIO_BTN_IMAGE_MAIN_ZOOM, group_id=Keys.RADIO_GROUP_IMAGE_MAIN_CLICK, default=True)
     r2 = sg.Radio("Tap on click", key=Keys.RADIO_BTN_IMAGE_MAIN_TAP, group_id=Keys.RADIO_GROUP_IMAGE_MAIN_CLICK)
-    col = sg.Column(layout=[[status_label_element], [r1, r2], [screenshot_btn, live_btn]])
+    cb_filters = sg.Checkbox("Filters", default=True, key=Keys.CHECKBOX_ALL_FILTER_ACTIVE, enable_events=True)
+    col = sg.Column(layout=[[status_label_element], [r1, r2, cb_filters], [screenshot_btn, live_btn]])
     return col
 
 
@@ -597,6 +599,9 @@ def main():
             if selected is not None and len(selected) == 1:
                 selected[0].enabled = values[Keys.CHECKBOX_FILTER_ACTIVE]
                 on_filters_changed(model, True, True)
+        elif event == Keys.CHECKBOX_ALL_FILTER_ACTIVE:
+            model.apply_filters = values[Keys.CHECKBOX_ALL_FILTER_ACTIVE]
+            on_filters_changed(model, False, False)
 
     window.close()
 
