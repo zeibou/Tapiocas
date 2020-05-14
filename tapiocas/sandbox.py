@@ -47,6 +47,7 @@ class Keys(Enum):
     BUTTON_TESSERACT_CHECK = auto(),
     INPUT_TESSERACT_WHITELIST = auto(),
     COMBOBOX_TESSERACT_PSM = auto(),
+    MULTILINE_TESSERACT_RESULT = auto(),
 
 
 DISPLAY_SIZE_RATIO = 4
@@ -424,7 +425,7 @@ def layout_tab_zoom():
     zoom_slider = sg.Slider(default_value=2, range=(0, len(ZOOM_LEVELS) - 1), disable_number_display=True,
                             orientation='h', resolution=1, enable_events=True, size=(50, 20), key=Keys.SLIDER_ZOOM)
     zoom_line = [sg.T(f"x{250 // ZOOM_LEVELS[0]}"), zoom_slider, sg.T(f"x{250 // ZOOM_LEVELS[-1]}")]
-    return sg.Tab('Zoom', [zoom_line])
+    return sg.Tab('Zoom', [[sg.T()], zoom_line])
 
 
 def layout_tab_crop(model: Model):
@@ -442,7 +443,7 @@ def layout_tab_crop(model: Model):
                    sg.T("Height:", size=(8, 1)),
                    sg.Spin(height_values, key=Keys.SPIN_CROP_HEIGHT, size=(8, 1), enable_events=True)]
 
-    return sg.Tab('Crop', [crop_line_1, crop_line_2])
+    return sg.Tab('Crop', [[sg.T()], crop_line_1, crop_line_2])
 
 
 def layout_tab_text_reco():
@@ -450,11 +451,11 @@ def layout_tab_text_reco():
                                  default_value=text_reco.PSM.SPARSE_TEXT,
                                  key=Keys.COMBOBOX_TESSERACT_PSM)
     label_whitelist = sg.T("    Whitelist:", tooltip="example: '0123456789' for numeric only, empty means no restriction")
-    input_whitelist = sg.Input("", key=Keys.INPUT_TESSERACT_WHITELIST, size=(40, 1))
-
+    input_whitelist = sg.Input("", key=Keys.INPUT_TESSERACT_WHITELIST, size=(20, 1))
     ocr_button = sg.B("Find Text", key=Keys.BUTTON_TESSERACT_CHECK)
-    return sg.Tab('Text', [[psm_combobox, label_whitelist, input_whitelist],
-                           [ocr_button]])
+    result = sg.Multiline(size=(40, 3), key=Keys.MULTILINE_TESSERACT_RESULT, background_color="lightgray")
+    inputs_col = sg.Column(layout=[[psm_combobox], [label_whitelist, input_whitelist], [ocr_button]])
+    return sg.Tab('Text', [[inputs_col, result]])
 
 
 def layout_col_zoom_image(model):
@@ -541,7 +542,8 @@ def main():
         elif event == Keys.BUTTON_TESSERACT_CHECK:
             psm = values[Keys.COMBOBOX_TESSERACT_PSM]
             whitelist = values[Keys.INPUT_TESSERACT_WHITELIST]
-            print(text_reco.find_text(model.zoom_filtered, psm=psm, whitelist=whitelist))
+            txt = text_reco.find_text(model.zoom_filtered, psm=psm, whitelist=whitelist)
+            window[Keys.MULTILINE_TESSERACT_RESULT].update(value=txt)
         elif event == Keys.BUTTON_RECORD:
             if model.recording:
                 # not sent to background worker because we want to abort the current action
