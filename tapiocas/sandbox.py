@@ -76,12 +76,10 @@ class Model:
         self.recording = False
         self.recording_stopped = False
         self.live_screenshot = False
-        start_color = (random.randint(25, 100), random.randint(25, 100), random.randint(25, 100))
-        start_image = np.zeros((device_screen_size[1], device_screen_size[0], 3), np.uint8)
-        start_image[:] = start_color
+        start_image = np.random.randint(50, 150, (device_screen_size[1], device_screen_size[0], 3), np.uint8)
         self.screenshot_raw = start_image
         self.screenshot_filtered = start_image
-        self.zoom_filtered = start_image
+        self.zoom_filtered = None
         self._screenshot_lock = threading.Lock()
         self._screenshot_raw_new = None
         self.filters = []
