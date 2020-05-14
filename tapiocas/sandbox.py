@@ -12,6 +12,7 @@ from adb_connector import AdbConnector
 import config_manager
 import log_manager
 import image_filters as filters
+import text_reco
 
 
 @unique
@@ -43,6 +44,9 @@ class Keys(Enum):
     SPIN_CROP_LEFT = auto(),
     SPIN_CROP_WIDTH = auto(),
     SPIN_CROP_HEIGHT = auto(),
+    BUTTON_TESSERACT_CHECK = auto(),
+    INPUT_TESSERACT_WHITELIST = auto(),
+    COMBOBOX_TESSERACT_PSM = auto(),
 
 
 DISPLAY_SIZE_RATIO = 4
@@ -213,7 +217,8 @@ def get_pointer_position_on_image(image_element: sg.Image):
     widget_width, widget_height = w.winfo_width(), w.winfo_height()
     image_width, image_height = w.image.width(), w.image.height()
     extra_width, extra_height = widget_width - image_width, widget_height - image_height
-    padx, pady = extra_width - img_pos_x, extra_height - img_pos_y # not sure that's the right way but it works with current layout
+    # not sure that's the right way but it works with current layout
+    padx, pady = extra_width - img_pos_x, extra_height - img_pos_y
     x, y = mouse_x - w.winfo_rootx() - padx, mouse_y - w.winfo_rooty() - pady
     return (x, y) if 0 <= x < image_width and 0 <= y < image_height else None
 
@@ -408,22 +413,21 @@ def layout_col_main_image_menu():
 def layout_col_main_image(model: Model):
     coord_label_element = sg.Text(size=(30, 1), justification='center', key=Keys.LABEL_COORD)
     main_image_element = sg.Image(data=get_image_bytes(get_image_thumbnail(model.screenshot_raw)),
-                                        enable_events=True,
-                                        key=Keys.IMAGE_MAIN)
+                                  enable_events=True,
+                                  key=Keys.IMAGE_MAIN)
     col = sg.Column(layout=[[layout_col_main_image_menu()], [main_image_element], [coord_label_element]],
                     element_justification='center')
     return col
 
 
-def layout_col_zoom_image(model):
-    zoom_image = np.zeros((ZOOM_IMAGE_SIZE, ZOOM_IMAGE_SIZE, 3), np.uint8)
-    zoom_image_element = sg.Image(data=get_image_bytes(zoom_image),
-                                        enable_events=True,
-                                        key=Keys.IMAGE_ZOOM)
-    close_button = sg.B("Close", key=Keys.BUTTON_ZOOM_CLOSE)
+def layout_tab_zoom():
     zoom_slider = sg.Slider(default_value=2, range=(0, len(ZOOM_LEVELS) - 1), disable_number_display=True,
                             orientation='h', resolution=1, enable_events=True, size=(50, 20), key=Keys.SLIDER_ZOOM)
     zoom_line = [sg.T(f"x{250 // ZOOM_LEVELS[0]}"), zoom_slider, sg.T(f"x{250 // ZOOM_LEVELS[-1]}")]
+    return sg.Tab('Zoom', [zoom_line])
+
+
+def layout_tab_crop(model: Model):
     left_values = [i for i in range(model.device_screen_size[0])]
     width_values = [i for i in range(1, model.device_screen_size[0])]
     top_values = [i for i in range(model.device_screen_size[1])]
@@ -438,16 +442,34 @@ def layout_col_zoom_image(model):
                    sg.T("Height:", size=(8, 1)),
                    sg.Spin(height_values, key=Keys.SPIN_CROP_HEIGHT, size=(8, 1), enable_events=True)]
 
-    zoom_tab = sg.Tab('Zoom', [zoom_line])
-    crop_tab = sg.Tab('Crop', [crop_line_1, crop_line_2])
-    tab_group_layout = [[zoom_tab, crop_tab]]
+    return sg.Tab('Crop', [crop_line_1, crop_line_2])
 
+
+def layout_tab_text_reco():
+    psm_combobox = sg.InputCombo(values=[v for v in text_reco.PSM],
+                                 default_value=text_reco.PSM.SPARSE_TEXT,
+                                 key=Keys.COMBOBOX_TESSERACT_PSM)
+    label_whitelist = sg.T("    Whitelist:", tooltip="example: '0123456789' for numeric only, empty means no restriction")
+    input_whitelist = sg.Input("", key=Keys.INPUT_TESSERACT_WHITELIST, size=(40, 1))
+
+    ocr_button = sg.B("Find Text", key=Keys.BUTTON_TESSERACT_CHECK)
+    return sg.Tab('Text', [[psm_combobox, label_whitelist, input_whitelist],
+                           [ocr_button]])
+
+
+def layout_col_zoom_image(model):
+    zoom_image = np.zeros((ZOOM_IMAGE_SIZE, ZOOM_IMAGE_SIZE, 3), np.uint8)
+    zoom_image_element = sg.Image(data=get_image_bytes(zoom_image),
+                                  enable_events=True,
+                                  key=Keys.IMAGE_ZOOM)
+    close_button = sg.B("Close", key=Keys.BUTTON_ZOOM_CLOSE)
+
+    tab_group_layout = [[layout_tab_zoom(), layout_tab_crop(model), layout_tab_text_reco()]]
     col = sg.Column(layout=[[sg.TabGroup(layout=tab_group_layout)],
                             [zoom_image_element],
                             [close_button]],
-                           key=Keys.COLUMN_ZOOM,
-                           #visible=False,
-                           element_justification='center')
+                    key=Keys.COLUMN_ZOOM,
+                    element_justification='center')
     return col
 
 
@@ -516,6 +538,10 @@ def main():
                               values[Keys.SPIN_CROP_HEIGHT])
             update_main_image(model)
             update_zoom_image(model)
+        elif event == Keys.BUTTON_TESSERACT_CHECK:
+            psm = values[Keys.COMBOBOX_TESSERACT_PSM]
+            whitelist = values[Keys.INPUT_TESSERACT_WHITELIST]
+            print(text_reco.find_text(model.zoom_filtered, psm=psm, whitelist=whitelist))
         elif event == Keys.BUTTON_RECORD:
             if model.recording:
                 # not sent to background worker because we want to abort the current action

@@ -3,3 +3,4 @@ pysimplegui
 Pillow
 opencv-python
 numpy
+pytesseract
