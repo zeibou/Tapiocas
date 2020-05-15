@@ -21,6 +21,7 @@ class Keys(Enum):
     MULTILINE_RECORD = auto()
     BUTTON_SCREENSHOT = auto()
     BUTTON_SCREENSHOT_LIVE = auto()
+    BUTTON_IMAGE_LOAD = auto()
     IMAGE_MAIN = auto()
     RADIO_GROUP_IMAGE_MAIN_CLICK = auto()
     RADIO_BTN_IMAGE_MAIN_ZOOM = auto()
@@ -356,6 +357,13 @@ def save_crop_image(model: Model):
             return
 
 
+def load_main_image(model: Model):
+    filepath = sg.popup_get_file("Load screenshot file", initial_folder=config.output_dir)
+    if filepath and os.path.exists(filepath):
+        im = cv2.imread(filepath)
+        model.enqueue_new_screenshot(im)
+
+
 def apply_filters(model: Model, image):
     if model.apply_filters:
         for f in model.filters:
@@ -429,13 +437,14 @@ def layout_col_action_panel():
 
 
 def layout_col_main_image_menu():
-    screenshot_btn = sg.B("Get Screenshot", key=Keys.BUTTON_SCREENSHOT, size=(30, 1))
-    live_btn = sg.Checkbox("Live", key=Keys.BUTTON_SCREENSHOT_LIVE, enable_events=True, size=(10, 1))
+    load_btn = sg.B("Load image", key=Keys.BUTTON_IMAGE_LOAD, size=(10, 1))
+    screenshot_btn = sg.B("Get Screenshot", key=Keys.BUTTON_SCREENSHOT, size=(17, 1))
+    live_btn = sg.Checkbox("Live", key=Keys.BUTTON_SCREENSHOT_LIVE, enable_events=True, size=(8, 1))
     status_label_element = sg.T("", size=(40, 1), key=Keys.LABEL_STATUS)
     r1 = sg.Radio("Zoom on click", key=Keys.RADIO_BTN_IMAGE_MAIN_ZOOM, group_id=Keys.RADIO_GROUP_IMAGE_MAIN_CLICK, default=True)
     r2 = sg.Radio("Tap on click", key=Keys.RADIO_BTN_IMAGE_MAIN_TAP, group_id=Keys.RADIO_GROUP_IMAGE_MAIN_CLICK)
     cb_filters = sg.Checkbox("Filters", default=True, key=Keys.CHECKBOX_ALL_FILTER_ACTIVE, enable_events=True)
-    col = sg.Column(layout=[[status_label_element], [r1, r2, cb_filters], [screenshot_btn, live_btn]])
+    col = sg.Column(layout=[[status_label_element], [r1, r2, cb_filters], [load_btn, screenshot_btn, live_btn]])
     return col
 
 
@@ -493,7 +502,7 @@ def layout_col_zoom_image(model):
                                   enable_events=True,
                                   key=Keys.IMAGE_ZOOM)
     close_button = sg.B("Close", key=Keys.BUTTON_ZOOM_CLOSE)
-    save_button = sg.B(f"Save as", key=Keys.BUTTON_CROP_SAVE)
+    save_button = sg.B(f"Save image", key=Keys.BUTTON_CROP_SAVE)
 
     tab_group_layout = [[layout_tab_zoom(), layout_tab_crop(model), layout_tab_text_reco()]]
     col = sg.Column(layout=[[sg.TabGroup(layout=tab_group_layout)],
@@ -554,6 +563,8 @@ def main():
             capture_screenshot_action(model, worker, connector)
         elif event == Keys.BUTTON_SCREENSHOT_LIVE:
             model.live_screenshot = values[Keys.BUTTON_SCREENSHOT_LIVE]
+        elif event == Keys.BUTTON_IMAGE_LOAD:
+            load_main_image(model)
         elif event == Keys.BUTTON_CROP_SAVE:
             save_crop_image(model)
         elif event == Keys.BUTTON_ZOOM_CLOSE:
