@@ -6,6 +6,7 @@ import collections
 import threading
 import time
 from enum import Enum, unique, auto
+import os
 
 from adb_connector import AdbConnector
 import config_manager
@@ -16,38 +17,39 @@ import text_reco
 
 @unique
 class Keys(Enum):
-    BUTTON_RECORD = auto(),
-    MULTILINE_RECORD = auto(),
-    BUTTON_SCREENSHOT = auto(),
-    BUTTON_SCREENSHOT_LIVE = auto(),
-    IMAGE_MAIN = auto(),
-    RADIO_GROUP_IMAGE_MAIN_CLICK = auto(),
-    RADIO_BTN_IMAGE_MAIN_ZOOM = auto(),
-    RADIO_BTN_IMAGE_MAIN_TAP = auto(),
-    IMAGE_ZOOM = auto(),
-    SLIDER_ZOOM = auto(),
-    BUTTON_ZOOM_CLOSE = auto(),
-    COLUMN_ZOOM = auto(),
-    LABEL_STATUS = auto(),
-    LABEL_COORD = auto(),
-    LIST_FILTERS_LIBRARY = auto(),
-    LIST_FILTERS_SELECTED = auto(),
-    BUTTON_FILTER_ADD = auto(),
-    BUTTON_FILTER_REMOVE = auto(),
-    INPUT_FILTER_VALUE = auto(),
-    BUTTON_FILTER_APPLY = auto(),
-    BUTTON_FILTER_DOWN = auto(),
-    BUTTON_FILTER_UP = auto(),
-    CHECKBOX_FILTER_ACTIVE = auto(),
-    CHECKBOX_ALL_FILTER_ACTIVE = auto(),
-    SPIN_CROP_TOP = auto(),
-    SPIN_CROP_LEFT = auto(),
-    SPIN_CROP_WIDTH = auto(),
-    SPIN_CROP_HEIGHT = auto(),
-    BUTTON_TESSERACT_CHECK = auto(),
-    INPUT_TESSERACT_WHITELIST = auto(),
-    COMBOBOX_TESSERACT_PSM = auto(),
-    MULTILINE_TESSERACT_RESULT = auto(),
+    BUTTON_RECORD = auto()
+    MULTILINE_RECORD = auto()
+    BUTTON_SCREENSHOT = auto()
+    BUTTON_SCREENSHOT_LIVE = auto()
+    IMAGE_MAIN = auto()
+    RADIO_GROUP_IMAGE_MAIN_CLICK = auto()
+    RADIO_BTN_IMAGE_MAIN_ZOOM = auto()
+    RADIO_BTN_IMAGE_MAIN_TAP = auto()
+    IMAGE_ZOOM = auto()
+    SLIDER_ZOOM = auto()
+    BUTTON_ZOOM_CLOSE = auto()
+    COLUMN_ZOOM = auto()
+    LABEL_STATUS = auto()
+    LABEL_COORD = auto()
+    LIST_FILTERS_LIBRARY = auto()
+    LIST_FILTERS_SELECTED = auto()
+    BUTTON_FILTER_ADD = auto()
+    BUTTON_FILTER_REMOVE = auto()
+    INPUT_FILTER_VALUE = auto()
+    BUTTON_FILTER_APPLY = auto()
+    BUTTON_FILTER_DOWN = auto()
+    BUTTON_FILTER_UP = auto()
+    CHECKBOX_FILTER_ACTIVE = auto()
+    CHECKBOX_ALL_FILTER_ACTIVE = auto()
+    SPIN_CROP_TOP = auto()
+    SPIN_CROP_LEFT = auto()
+    SPIN_CROP_WIDTH = auto()
+    SPIN_CROP_HEIGHT = auto()
+    BUTTON_CROP_SAVE = auto()
+    BUTTON_TESSERACT_CHECK = auto()
+    INPUT_TESSERACT_WHITELIST = auto()
+    COMBOBOX_TESSERACT_PSM = auto()
+    MULTILINE_TESSERACT_RESULT = auto()
 
 
 DISPLAY_SIZE_RATIO = 4
@@ -329,6 +331,20 @@ def update_zoom_image(model: Model):
     model.window[Keys.IMAGE_ZOOM].update(data=get_image_bytes(zoom))
 
 
+def save_crop_image(model: Model):
+    x, y = model.zoom_rectangle[0]
+    filename = f"crop_x{x}_y{y}_w{model.zoom_width}_h{model.zoom_height}.png"
+    filepath = os.path.join(config.output_dir, filename)
+    while True:
+        filepath = sg.popup_get_text(title="Save as...", message="", size=(100, 1), default_text=filepath)
+        if not filepath:
+            return
+        if not os.path.exists(filepath) or "Yes" == sg.popup_yes_no("File exists. Overwrite ?", title="Warning"):
+            logging.info(f"Saving crop image to {filepath}")
+            cv2.imwrite(filepath, model.zoom_filtered)
+            return
+
+
 def apply_filters(model: Model, image):
     if model.apply_filters:
         for f in model.filters:
@@ -465,11 +481,12 @@ def layout_col_zoom_image(model):
                                   enable_events=True,
                                   key=Keys.IMAGE_ZOOM)
     close_button = sg.B("Close", key=Keys.BUTTON_ZOOM_CLOSE)
+    save_button = sg.B(f"Save as", key=Keys.BUTTON_CROP_SAVE)
 
     tab_group_layout = [[layout_tab_zoom(), layout_tab_crop(model), layout_tab_text_reco()]]
     col = sg.Column(layout=[[sg.TabGroup(layout=tab_group_layout)],
                             [zoom_image_element],
-                            [close_button]],
+                            [save_button, close_button]],
                     key=Keys.COLUMN_ZOOM,
                     element_justification='center')
     return col
@@ -525,6 +542,8 @@ def main():
             capture_screenshot_action(model, worker, connector)
         elif event == Keys.BUTTON_SCREENSHOT_LIVE:
             model.live_screenshot = values[Keys.BUTTON_SCREENSHOT_LIVE]
+        elif event == Keys.BUTTON_CROP_SAVE:
+            save_crop_image(model)
         elif event == Keys.BUTTON_ZOOM_CLOSE:
             model.zoom_mode = False
             model.window[Keys.COLUMN_ZOOM].update(visible=False)
