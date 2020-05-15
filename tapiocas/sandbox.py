@@ -331,6 +331,13 @@ def update_zoom_image(model: Model):
     h2, w2 = int(h * r), int(w * r)
     zoom = cv2.resize(model.zoom_filtered, (w2, h2), interpolation=cv2.INTER_NEAREST)
     cv2.rectangle(zoom, (0, 0), (w2 - 1, h2 - 1), (50, 50, 240, 240))
+    if w2 != h2:
+        # we add a black background image to keep the 500x500 shape and avoid layout redraws
+        background = np.zeros((500, 500, 3), dtype=np.uint8)
+        wl, wr = w2 // 2 + w2 % 2 - 1, w2 // 2
+        ht, hb = h2 // 2 + h2 % 2 - 1, h2 // 2
+        background[250-ht-1:250+hb, 250-wl-1:250+wr] = zoom
+        zoom = background
     model.window[Keys.IMAGE_ZOOM].update(data=get_image_bytes(zoom))
 
 
