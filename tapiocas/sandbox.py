@@ -67,7 +67,8 @@ IMAGE_FILTERS = {f.name(): f for f in [
     filters.CannyFilter,
     filters.ContourFilter,
     filters.InvertFilter,
-    filters.ThresholdFilter,
+    filters.BinaryThresholdFilter,
+    filters.AdaptativeThresholdFilter,
 ]}
 
 
