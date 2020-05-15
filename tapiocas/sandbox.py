@@ -57,7 +57,7 @@ SCREENSHOT_RAW = False
 SCREENSHOT_PULL = False
 
 ZOOM_IMAGE_SIZE = 500
-ZOOM_LEVELS = [250, 112, 50, 22, 10]
+ZOOM_LEVELS = [-1, 250, 112, 50, 22, 10]
 RECORDING_COLOR = "tan1"
 NO_RECORDING_COLOR = "lightsteelblue2"
 
@@ -129,9 +129,12 @@ class Model:
 
     def update_zoom_radius(self, radius):
         # we override the current width / height
-        # todo: keep the ratio?
-        self._zoom_width = radius * 2
-        self._zoom_height = radius * 2
+        if radius > 0:
+            self._zoom_width = radius * 2
+            self._zoom_height = radius * 2
+        else:
+            self._zoom_width = self.device_screen_size[0]
+            self._zoom_height = self.device_screen_size[1]
         self._compute_zoom_rectangle(True)
 
     def update_crop(self, left, top, width, height):
@@ -439,10 +442,11 @@ def layout_col_main_image(model: Model):
 
 
 def layout_tab_zoom():
-    zoom_slider = sg.Slider(default_value=2, range=(0, len(ZOOM_LEVELS) - 1), disable_number_display=True,
-                            orientation='h', resolution=1, enable_events=True, size=(50, 20), key=Keys.SLIDER_ZOOM)
-    zoom_line = [sg.T(f"x{250 // ZOOM_LEVELS[0]}"), zoom_slider, sg.T(f"x{250 // ZOOM_LEVELS[-1]}")]
-    return sg.Tab('Zoom', [[sg.T()], zoom_line])
+    zoom_slider = sg.Slider(default_value=3, range=(0, len(ZOOM_LEVELS) - 1), disable_number_display=True,
+                            orientation='h', resolution=1, enable_events=True, size=(60, 20), key=Keys.SLIDER_ZOOM)
+    label_line = [sg.T(f"  x{250 // z if z > 0 else 0}", size=(11, 1)) for z in ZOOM_LEVELS]
+    slider_line = [zoom_slider]
+    return sg.Tab('Zoom', [[sg.T()], label_line, slider_line])
 
 
 def layout_tab_crop(model: Model):
