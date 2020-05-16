@@ -32,6 +32,7 @@ class Keys(Enum):
     COLUMN_ZOOM = auto()
     LABEL_STATUS = auto()
     LABEL_COORD = auto()
+    LABEL_COLOR = auto()
     LIST_FILTERS_LIBRARY = auto()
     LIST_FILTERS_SELECTED = auto()
     BUTTON_FILTER_ADD = auto()
@@ -307,9 +308,12 @@ def display_pointer_pos_in_device_coordinates(model: Model):
     pos = get_pointer_pos_in_device_coordinates(model)
     if pos:
         x, y = pos
+        b, g, r = model.screenshot_filtered[y][x]
         model.window[Keys.LABEL_COORD].update(value=f"x={int(x)}  y={int(y)}")
+        model.window[Keys.LABEL_COLOR].update(value=f"R={r}  G={g}  B={b}")
     else:
         model.window[Keys.LABEL_COORD].update(value="")
+        model.window[Keys.LABEL_COLOR].update(value="")
 
 
 def update_main_image(model: Model):
@@ -449,11 +453,12 @@ def layout_col_main_image_menu():
 
 
 def layout_col_main_image(model: Model):
-    coord_label_element = sg.Text(size=(30, 1), justification='center', key=Keys.LABEL_COORD)
+    coord_label_element = sg.Text(size=(20, 1), justification='center', key=Keys.LABEL_COORD)
+    color_label_element = sg.Text(size=(20, 1), justification='center', key=Keys.LABEL_COLOR)
     main_image_element = sg.Image(data=get_image_bytes(get_image_thumbnail(model.screenshot_raw)),
                                   enable_events=True,
                                   key=Keys.IMAGE_MAIN)
-    col = sg.Column(layout=[[layout_col_main_image_menu()], [main_image_element], [coord_label_element]],
+    col = sg.Column(layout=[[layout_col_main_image_menu()], [main_image_element], [coord_label_element, color_label_element]],
                     element_justification='center')
     return col
 
