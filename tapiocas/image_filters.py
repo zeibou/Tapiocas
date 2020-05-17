@@ -43,7 +43,7 @@ class GrayFilter(Filter):
     def apply(self, image):
         # convert to gray (matrix shape will change to a single channel)
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        # converts back to RGB (pixels will stay gray) so that we can draw in color again
+        # converts back to BGR (pixels will stay gray) so that we can draw in color again
         gray = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
         return gray
 
@@ -126,7 +126,7 @@ class InvertFilter(Filter):
         return cv2.bitwise_not(image)
 
 
-class ThresholdFilter(Filter):
+class AdaptativeThresholdFilter(Filter):
     @staticmethod
     def name():
         return "Adaptive Threshold"
@@ -139,3 +139,24 @@ class ThresholdFilter(Filter):
         th = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
         ret = cv2.cvtColor(th, cv2.COLOR_GRAY2BGR)
         return ret
+
+
+class BinaryThresholdFilter(Filter):
+    def __init__(self):
+        super().__init__(100)
+
+    @staticmethod
+    def name():
+        return "Binary Threshold"
+
+    def set_value(self, v):
+        v = int(v)
+        if 0 < v <= 255:
+            super().set_value(v)
+
+    def apply(self, image):
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        _, image = cv2.threshold(image, self.value, 255, cv2.THRESH_BINARY)
+        ret = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+        return ret
+

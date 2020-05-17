@@ -5,47 +5,61 @@ import logging
 import collections
 import threading
 import time
-import random
 from enum import Enum, unique, auto
+import os
 
 from adb_connector import AdbConnector
 import config_manager
 import log_manager
 import image_filters as filters
+import text_reco
 
 
 @unique
 class Keys(Enum):
-    BUTTON_RECORD = auto(),
-    MULTILINE_RECORD = auto(),
-    BUTTON_SCREENSHOT = auto(),
-    BUTTON_SCREENSHOT_LIVE = auto(),
-    IMAGE_MAIN = auto(),
-    RADIO_GROUP_IMAGE_MAIN_CLICK = auto(),
-    RADIO_BTN_IMAGE_MAIN_ZOOM = auto(),
-    RADIO_BTN_IMAGE_MAIN_TAP = auto(),
-    IMAGE_ZOOM = auto(),
-    SLIDER_ZOOM = auto(),
-    BUTTON_ZOOM_CLOSE = auto(),
-    COLUMN_ZOOM = auto(),
-    LABEL_STATUS = auto(),
-    LABEL_COORD = auto(),
-    LIST_FILTERS_LIBRARY = auto(),
-    LIST_FILTERS_SELECTED = auto(),
-    BUTTON_FILTER_ADD = auto(),
-    BUTTON_FILTER_REMOVE = auto(),
-    INPUT_FILTER_VALUE = auto(),
-    BUTTON_FILTER_APPLY = auto(),
-    BUTTON_FILTER_DOWN = auto(),
-    BUTTON_FILTER_UP = auto(),
-    CHECKBOX_FILTER_ACTIVE = auto(),
+    BUTTON_RECORD = auto()
+    MULTILINE_RECORD = auto()
+    BUTTON_SCREENSHOT = auto()
+    BUTTON_SCREENSHOT_LIVE = auto()
+    BUTTON_IMAGE_LOAD = auto()
+    IMAGE_MAIN = auto()
+    RADIO_GROUP_IMAGE_MAIN_CLICK = auto()
+    RADIO_BTN_IMAGE_MAIN_ZOOM = auto()
+    RADIO_BTN_IMAGE_MAIN_TAP = auto()
+    IMAGE_ZOOM = auto()
+    SLIDER_ZOOM = auto()
+    BUTTON_ZOOM_CLOSE = auto()
+    COLUMN_ZOOM = auto()
+    LABEL_STATUS = auto()
+    LABEL_COORD = auto()
+    LABEL_COLOR = auto()
+    LIST_FILTERS_LIBRARY = auto()
+    LIST_FILTERS_SELECTED = auto()
+    BUTTON_FILTER_ADD = auto()
+    BUTTON_FILTER_REMOVE = auto()
+    INPUT_FILTER_VALUE = auto()
+    BUTTON_FILTER_APPLY = auto()
+    BUTTON_FILTER_DOWN = auto()
+    BUTTON_FILTER_UP = auto()
+    CHECKBOX_FILTER_ACTIVE = auto()
+    CHECKBOX_ALL_FILTER_ACTIVE = auto()
+    SPIN_CROP_TOP = auto()
+    SPIN_CROP_LEFT = auto()
+    SPIN_CROP_WIDTH = auto()
+    SPIN_CROP_HEIGHT = auto()
+    BUTTON_CROP_SAVE = auto()
+    BUTTON_TESSERACT_CHECK = auto()
+    INPUT_TESSERACT_WHITELIST = auto()
+    COMBOBOX_TESSERACT_PSM = auto()
+    MULTILINE_TESSERACT_RESULT = auto()
 
 
 DISPLAY_SIZE_RATIO = 4
 SCREENSHOT_RAW = False
 SCREENSHOT_PULL = False
 
-ZOOM_LEVELS = [250, 112, 50, 22, 10]
+ZOOM_IMAGE_SIZE = 500
+ZOOM_LEVELS = [-1, 250, 112, 50, 22, 10]
 RECORDING_COLOR = "tan1"
 NO_RECORDING_COLOR = "lightsteelblue2"
 
@@ -55,7 +69,8 @@ IMAGE_FILTERS = {f.name(): f for f in [
     filters.CannyFilter,
     filters.ContourFilter,
     filters.InvertFilter,
-    filters.ThresholdFilter,
+    filters.BinaryThresholdFilter,
+    filters.AdaptativeThresholdFilter,
 ]}
 
 
@@ -64,21 +79,23 @@ class Model:
 
     def __init__(self, device_screen_size):
         self.device_screen_size = device_screen_size
-        self.zoom_center = (0, 0)
-        self.zoom_radius = 50
+        self._zoom_center = (0, 0)
+        self._zoom_width = 100
+        self._zoom_height = 100
         self.zoom_mode = False
         self.recording = False
         self.recording_stopped = False
         self.live_screenshot = False
-        start_color = (random.randint(25, 100), random.randint(25, 100), random.randint(25, 100))
-        start_image = np.zeros((device_screen_size[1], device_screen_size[0], 3), np.uint8)
-        start_image[:] = start_color
+        start_image = np.random.randint(50, 150, (device_screen_size[1], device_screen_size[0], 3), np.uint8)
         self.screenshot_raw = start_image
         self.screenshot_filtered = start_image
+        self.zoom_filtered = None
         self._screenshot_lock = threading.Lock()
         self._screenshot_raw_new = None
         self.filters = []
         self.apply_filters = True
+        self._zoom_rectangle = None
+        self._compute_zoom_rectangle()
 
     # called from background thread
     def enqueue_new_screenshot(self, img):
@@ -94,21 +111,73 @@ class Model:
             self.screenshot_raw, self._screenshot_raw_new = self._screenshot_raw_new, None
             # if we detect a change of orientation, we reverse device_size and zoom shapes
             if self.device_screen_size[1] != self.screenshot_raw.shape[0]:
-                self.device_screen_size = self.screenshot_raw.shape[:2][::-1]
-                self.zoom_center = self.zoom_center[::-1]
+                self.orientation_changed()
             refresh = True
         self._screenshot_lock.release()
         return refresh
 
+    def orientation_changed(self):
+        self.device_screen_size = self.screenshot_raw.shape[:2][::-1]
+        self._zoom_center = self._zoom_center[::-1]
+        self._zoom_width, self._zoom_height = self._zoom_height, self._zoom_width
+        self.window[Keys.SPIN_CROP_LEFT].update(values=[i for i in range(self.device_screen_size[0])])
+        self.window[Keys.SPIN_CROP_TOP].update(values=[i for i in range(self.device_screen_size[1])])
+        self.window[Keys.SPIN_CROP_WIDTH].update(values=[i for i in range(1, self.device_screen_size[0])])
+        self.window[Keys.SPIN_CROP_HEIGHT].update(values=[i for i in range(1,  self.device_screen_size[1])])
+        self._compute_zoom_rectangle(True)
+
+    def update_zoom_center(self, center):
+        self._zoom_center = center
+        self._compute_zoom_rectangle(True)
+
+    def update_zoom_radius(self, radius):
+        # we override the current width / height
+        if radius > 0:
+            self._zoom_width = radius * 2
+            self._zoom_height = radius * 2
+        else:
+            self._zoom_width = self.device_screen_size[0]
+            self._zoom_height = self.device_screen_size[1]
+        self._compute_zoom_rectangle(True)
+
+    def update_crop(self, left, top, width, height):
+        left = max(0, min(int(left), self.device_screen_size[0]-1))
+        top = max(0, min(int(top), self.device_screen_size[1]-1))
+        width = max(1, min(int(width), self.device_screen_size[0]-1))
+        height = max(1, min(int(height), self.device_screen_size[1]-1))
+        self._zoom_center = (left + (width // 2 + width % 2 - 1), top + (height // 2 + height % 2 - 1))
+        self._zoom_width = width
+        self._zoom_height = height
+        self._compute_zoom_rectangle(True)
+
+    def _compute_zoom_rectangle(self, update_spin_elements=False):
+        zx, zy = self._zoom_center
+        w, h = self._zoom_width, self._zoom_height
+        # if w or h is even, the center pixel is on the upper left side (+1 pixel on the right / bottom side)
+        # wl / wr is the number of pixel to the left / right of center, same for ht / hb
+        wl, wr = w // 2 + w % 2 - 1, w // 2
+        ht, hb = h // 2 + h % 2 - 1, h // 2
+        # adjust center to stay inside image
+        zx = min(max(zx, wl), self.device_screen_size[0] - wr - 1)
+        zy = min(max(zy, ht), self.device_screen_size[1] - hb - 1)
+        self._zoom_rectangle = (zx - wl, zy - ht), (zx + wr, zy + hb)
+        if update_spin_elements:
+            self.window[Keys.SPIN_CROP_LEFT].update(value=zx - wl)
+            self.window[Keys.SPIN_CROP_TOP].update(value=zy - ht)
+            self.window[Keys.SPIN_CROP_WIDTH].update(value=self._zoom_width)
+            self.window[Keys.SPIN_CROP_HEIGHT].update(value=self._zoom_height)
+
     @property
     def zoom_rectangle(self):
-        # returns upper left and lower right points of zoom rectangle
-        zx, zy = self.zoom_center
-        zr = self.zoom_radius
-        # adjust center to stay inside image
-        zx = min(max(zx, zr), self.device_screen_size[0] - zr - 1)
-        zy = min(max(zy, zr), self.device_screen_size[1] - zr - 1)
-        return (zx - zr, zy - zr), (zx + zr, zy + zr)
+        return self._zoom_rectangle
+
+    @property
+    def zoom_width(self):
+        return self._zoom_width
+
+    @property
+    def zoom_height(self):
+        return self._zoom_height
 
 
 class BackgroundWorker:
@@ -127,7 +196,7 @@ class BackgroundWorker:
                 try:
                     action(*args)
                 except Exception as e:
-                    logging.error(e)
+                    logging.exception(e)
 
             else:
                 time.sleep(.05)
@@ -157,7 +226,8 @@ def get_pointer_position_on_image(image_element: sg.Image):
     widget_width, widget_height = w.winfo_width(), w.winfo_height()
     image_width, image_height = w.image.width(), w.image.height()
     extra_width, extra_height = widget_width - image_width, widget_height - image_height
-    padx, pady = extra_width - img_pos_x, extra_height - img_pos_y # not sure that's the right way but it works with current layout
+    # not sure that's the right way but it works with current layout
+    padx, pady = extra_width - img_pos_x, extra_height - img_pos_y
     x, y = mouse_x - w.winfo_rootx() - padx, mouse_y - w.winfo_rooty() - pady
     return (x, y) if 0 <= x < image_width and 0 <= y < image_height else None
 
@@ -180,7 +250,7 @@ def capture_screenshot_action(model: Model, worker: BackgroundWorker, connector:
                 capture_screenshot_action(model, worker, connector)
         except Exception as e:
             model.window[Keys.LABEL_STATUS].update("Error")
-            logging.error(e)
+            logging.exception(e)
     worker.enqueue(action)
 
 
@@ -192,7 +262,7 @@ def send_tap_action(coords, model: Model, worker: BackgroundWorker, connector: A
             model.window[Keys.LABEL_STATUS].update("")
         except Exception as e:
             model.window[Keys.LABEL_STATUS].update("Error")
-            logging.error(e)
+            logging.exception(e)
     worker.enqueue(action)
 
 
@@ -213,7 +283,7 @@ def record_events_action(model: Model, worker: BackgroundWorker, connector: AdbC
                 model.window[Keys.LABEL_STATUS].update("")
             else:
                 model.window[Keys.LABEL_STATUS].update("Error")
-                logging.error(e)
+                logging.exception(e)
         finally:
             model.recording = False
             model.window[Keys.BUTTON_RECORD].update(text="Record events")
@@ -229,8 +299,8 @@ def get_pointer_pos_in_device_coordinates(model: Model):
         pos = get_pointer_position_on_image(model.window[Keys.IMAGE_ZOOM])
         if pos:
             ul, br = model.zoom_rectangle
-            zoom_diameter = br[0] - ul[0]
-            x, y = get_coordinates_on_image(pos, get_image_size(model.window[Keys.IMAGE_ZOOM]), (zoom_diameter, zoom_diameter))
+            w, h = model.zoom_width, model.zoom_height
+            x, y = get_coordinates_on_image(pos, get_image_size(model.window[Keys.IMAGE_ZOOM]), (w, h))
             return x + ul[0], y + ul[1]
 
 
@@ -238,9 +308,12 @@ def display_pointer_pos_in_device_coordinates(model: Model):
     pos = get_pointer_pos_in_device_coordinates(model)
     if pos:
         x, y = pos
+        b, g, r = model.screenshot_filtered[y][x]
         model.window[Keys.LABEL_COORD].update(value=f"x={int(x)}  y={int(y)}")
+        model.window[Keys.LABEL_COLOR].update(value=f"R={r}  G={g}  B={b}")
     else:
         model.window[Keys.LABEL_COORD].update(value="")
+        model.window[Keys.LABEL_COLOR].update(value="")
 
 
 def update_main_image(model: Model):
@@ -258,11 +331,41 @@ def update_main_image(model: Model):
 
 def update_zoom_image(model: Model):
     ul, br = model.zoom_rectangle
-    zoom = model.screenshot_raw[ul[1]:br[1], ul[0]:br[0]]
-    zoom = apply_filters(model, zoom)
-    zoom = cv2.resize(zoom, (500, 500), interpolation=cv2.INTER_NEAREST)
-    cv2.rectangle(zoom, (0, 0), (499, 499), (50, 50, 240, 240))
+    model.zoom_filtered = model.screenshot_filtered[ul[1]:br[1]+1, ul[0]:br[0]+1]
+    w, h = model.zoom_width, model.zoom_height
+    r = ZOOM_IMAGE_SIZE / max(h, w)
+    h2, w2 = int(h * r), int(w * r)
+    zoom = cv2.resize(model.zoom_filtered, (w2, h2), interpolation=cv2.INTER_NEAREST)
+    cv2.rectangle(zoom, (0, 0), (w2 - 1, h2 - 1), (50, 50, 240, 240))
+    if w2 != h2:
+        # we add a black background image to keep the 500x500 shape and avoid layout redraws
+        background = np.zeros((500, 500, 3), dtype=np.uint8)
+        wl, wr = w2 // 2 + w2 % 2 - 1, w2 // 2
+        ht, hb = h2 // 2 + h2 % 2 - 1, h2 // 2
+        background[250-ht-1:250+hb, 250-wl-1:250+wr] = zoom
+        zoom = background
     model.window[Keys.IMAGE_ZOOM].update(data=get_image_bytes(zoom))
+
+
+def save_crop_image(model: Model):
+    x, y = model.zoom_rectangle[0]
+    filename = f"crop_x{x}_y{y}_w{model.zoom_width}_h{model.zoom_height}.png"
+    filepath = os.path.join(config.output_dir, filename)
+    while True:
+        filepath = sg.popup_get_text(title="Save as...", message="", size=(100, 1), default_text=filepath)
+        if not filepath:
+            return
+        if not os.path.exists(filepath) or "Yes" == sg.popup_yes_no("File exists. Overwrite ?", title="Warning"):
+            logging.info(f"Saving crop image to {filepath}")
+            cv2.imwrite(filepath, model.zoom_filtered)
+            return
+
+
+def load_main_image(model: Model):
+    filepath = sg.popup_get_file("Load screenshot file", initial_folder=config.output_dir)
+    if filepath and os.path.exists(filepath):
+        im = cv2.imread(filepath)
+        model.enqueue_new_screenshot(im)
 
 
 def apply_filters(model: Model, image):
@@ -272,7 +375,7 @@ def apply_filters(model: Model, image):
                 try:
                     image = f.apply(image)
                 except Exception as e:
-                    logging.error(e)
+                    logging.exception(e)
     return image
 
 
@@ -338,39 +441,80 @@ def layout_col_action_panel():
 
 
 def layout_col_main_image_menu():
-    screenshot_btn = sg.B("Get Screenshot", key=Keys.BUTTON_SCREENSHOT, size=(30, 1))
-    live_btn = sg.Checkbox("Live", key=Keys.BUTTON_SCREENSHOT_LIVE, enable_events=True, size=(10, 1))
+    load_btn = sg.B("Load image", key=Keys.BUTTON_IMAGE_LOAD, size=(10, 1))
+    screenshot_btn = sg.B("Get Screenshot", key=Keys.BUTTON_SCREENSHOT, size=(17, 1))
+    live_btn = sg.Checkbox("Live", key=Keys.BUTTON_SCREENSHOT_LIVE, enable_events=True, size=(8, 1))
     status_label_element = sg.T("", size=(40, 1), key=Keys.LABEL_STATUS)
     r1 = sg.Radio("Zoom on click", key=Keys.RADIO_BTN_IMAGE_MAIN_ZOOM, group_id=Keys.RADIO_GROUP_IMAGE_MAIN_CLICK, default=True)
     r2 = sg.Radio("Tap on click", key=Keys.RADIO_BTN_IMAGE_MAIN_TAP, group_id=Keys.RADIO_GROUP_IMAGE_MAIN_CLICK)
-    col = sg.Column(layout=[[status_label_element], [r1, r2], [screenshot_btn, live_btn]])
+    cb_filters = sg.Checkbox("Filters", default=True, key=Keys.CHECKBOX_ALL_FILTER_ACTIVE, enable_events=True)
+    col = sg.Column(layout=[[status_label_element], [r1, r2, cb_filters], [load_btn, screenshot_btn, live_btn]])
     return col
 
 
 def layout_col_main_image(model: Model):
-    coord_label_element = sg.Text(size=(30, 1), justification='center', key=Keys.LABEL_COORD)
+    coord_label_element = sg.Text(size=(20, 1), justification='center', key=Keys.LABEL_COORD)
+    color_label_element = sg.Text(size=(20, 1), justification='center', key=Keys.LABEL_COLOR)
     main_image_element = sg.Image(data=get_image_bytes(get_image_thumbnail(model.screenshot_raw)),
-                                        enable_events=True,
-                                        key=Keys.IMAGE_MAIN)
-    col = sg.Column(layout=[[layout_col_main_image_menu()], [main_image_element], [coord_label_element]],
+                                  enable_events=True,
+                                  key=Keys.IMAGE_MAIN)
+    col = sg.Column(layout=[[layout_col_main_image_menu()], [main_image_element], [coord_label_element, color_label_element]],
                     element_justification='center')
     return col
 
 
-def layout_col_zoom_image():
-    zoom_image = np.zeros((500, 500, 3), np.uint8)
+def layout_tab_zoom():
+    zoom_slider = sg.Slider(default_value=3, range=(0, len(ZOOM_LEVELS) - 1), disable_number_display=True,
+                            orientation='h', resolution=1, enable_events=True, size=(60, 20), key=Keys.SLIDER_ZOOM)
+    label_line = [sg.T(f"  x{250 // z if z > 0 else 0}", size=(11, 1)) for z in ZOOM_LEVELS]
+    slider_line = [zoom_slider]
+    return sg.Tab('Zoom', [[sg.T()], label_line, slider_line])
+
+
+def layout_tab_crop(model: Model):
+    left_values = [i for i in range(model.device_screen_size[0])]
+    width_values = [i for i in range(1, model.device_screen_size[0])]
+    top_values = [i for i in range(model.device_screen_size[1])]
+    height_values = [i for i in range(1, model.device_screen_size[1])]
+    # should be updated when orientation changes
+    crop_line_1 = [sg.T("Left:", size=(8, 1)),
+                   sg.Spin(left_values, key=Keys.SPIN_CROP_LEFT, size=(8, 1), enable_events=True),
+                   sg.T("Width:", size=(8, 1)),
+                   sg.Spin(width_values, key=Keys.SPIN_CROP_WIDTH, size=(8, 1), enable_events=True)]
+    crop_line_2 = [sg.T("Top:", size=(8, 1)),
+                   sg.Spin(top_values, key=Keys.SPIN_CROP_TOP, size=(8, 1), enable_events=True),
+                   sg.T("Height:", size=(8, 1)),
+                   sg.Spin(height_values, key=Keys.SPIN_CROP_HEIGHT, size=(8, 1), enable_events=True)]
+
+    return sg.Tab('Crop', [[sg.T()], crop_line_1, crop_line_2])
+
+
+def layout_tab_text_reco():
+    psm_combobox = sg.InputCombo(values=[v for v in text_reco.PSM],
+                                 default_value=text_reco.PSM.SPARSE_TEXT,
+                                 key=Keys.COMBOBOX_TESSERACT_PSM)
+    label_whitelist = sg.T("    Whitelist:", tooltip="example: '0123456789' for numeric only, empty means no restriction")
+    input_whitelist = sg.Input("", key=Keys.INPUT_TESSERACT_WHITELIST, size=(20, 1))
+    ocr_button = sg.B("Find Text", key=Keys.BUTTON_TESSERACT_CHECK)
+    result = sg.Multiline(size=(40, 3), key=Keys.MULTILINE_TESSERACT_RESULT, background_color="lightgray")
+    inputs_col = sg.Column(layout=[[psm_combobox], [label_whitelist, input_whitelist], [ocr_button]])
+    return sg.Tab('Text', [[inputs_col, result]])
+
+
+def layout_col_zoom_image(model):
+    zoom_image = np.zeros((ZOOM_IMAGE_SIZE, ZOOM_IMAGE_SIZE, 3), np.uint8)
     zoom_image_element = sg.Image(data=get_image_bytes(zoom_image),
-                                        enable_events=True,
-                                        key=Keys.IMAGE_ZOOM)
+                                  enable_events=True,
+                                  key=Keys.IMAGE_ZOOM)
     close_button = sg.B("Close", key=Keys.BUTTON_ZOOM_CLOSE)
-    zoom_slider = sg.Slider(default_value=2, range=(0, len(ZOOM_LEVELS) - 1), disable_number_display=True,
-                            orientation='h', resolution=1, enable_events=True, size=(50, 20), key=Keys.SLIDER_ZOOM)
-    col = sg.Column(layout=[[sg.T(f"x{250 // ZOOM_LEVELS[0]}"), zoom_slider, sg.T(f"x{250 // ZOOM_LEVELS[-1]}")],
+    save_button = sg.B(f"Save image", key=Keys.BUTTON_CROP_SAVE)
+
+    tab_group_layout = [[layout_tab_zoom(), layout_tab_crop(model), layout_tab_text_reco()]]
+    col = sg.Column(layout=[[sg.TabGroup(layout=tab_group_layout)],
                             [zoom_image_element],
-                            [close_button]],
-                           key=Keys.COLUMN_ZOOM,
-                           visible=False,
-                           element_justification='center')
+                            [save_button, close_button]],
+                    key=Keys.COLUMN_ZOOM,
+                    element_justification='center')
     return col
 
 
@@ -384,10 +528,18 @@ def main():
     model = Model((width, height))
 
     layout = [
-        [layout_controls_tab_container(model), layout_col_main_image(model), layout_col_zoom_image()]
+        [layout_controls_tab_container(model), layout_col_main_image(model), layout_col_zoom_image(model)]
     ]
     window = sg.Window("Tapiocas' Sandbox", layout)
     model.window = window
+    # read once to initialize elements
+    window.read(timeout=1)
+
+    # update zoom to initialize crop spin elements
+    model.zoom_mode = True
+    model.update_zoom_center((width // 2, height // 2))
+    update_main_image(model)
+    update_zoom_image(model)
 
     while True:
         event, values = window.read(timeout=100)
@@ -406,7 +558,7 @@ def main():
             if pos:
                 if values[Keys.RADIO_BTN_IMAGE_MAIN_ZOOM]:
                     model.zoom_mode = True
-                    model.zoom_center = pos
+                    model.update_zoom_center(pos)
                     update_main_image(model)
                     update_zoom_image(model)
                     model.window[Keys.COLUMN_ZOOM].update(visible=True)
@@ -416,14 +568,30 @@ def main():
             capture_screenshot_action(model, worker, connector)
         elif event == Keys.BUTTON_SCREENSHOT_LIVE:
             model.live_screenshot = values[Keys.BUTTON_SCREENSHOT_LIVE]
+        elif event == Keys.BUTTON_IMAGE_LOAD:
+            load_main_image(model)
+        elif event == Keys.BUTTON_CROP_SAVE:
+            save_crop_image(model)
         elif event == Keys.BUTTON_ZOOM_CLOSE:
             model.zoom_mode = False
             model.window[Keys.COLUMN_ZOOM].update(visible=False)
             update_main_image(model)
         elif event == Keys.SLIDER_ZOOM:
-            model.zoom_radius = ZOOM_LEVELS[int(values[Keys.SLIDER_ZOOM])]
+            model.update_zoom_radius(ZOOM_LEVELS[int(values[Keys.SLIDER_ZOOM])])
             update_main_image(model)
             update_zoom_image(model)
+        elif event in (Keys.SPIN_CROP_LEFT, Keys.SPIN_CROP_TOP, Keys.SPIN_CROP_WIDTH, Keys.SPIN_CROP_HEIGHT):
+            model.update_crop(values[Keys.SPIN_CROP_LEFT],
+                              values[Keys.SPIN_CROP_TOP],
+                              values[Keys.SPIN_CROP_WIDTH],
+                              values[Keys.SPIN_CROP_HEIGHT])
+            update_main_image(model)
+            update_zoom_image(model)
+        elif event == Keys.BUTTON_TESSERACT_CHECK:
+            psm = values[Keys.COMBOBOX_TESSERACT_PSM]
+            whitelist = values[Keys.INPUT_TESSERACT_WHITELIST]
+            txt = text_reco.find_text(model.zoom_filtered, psm=psm, whitelist=whitelist)
+            window[Keys.MULTILINE_TESSERACT_RESULT].update(value=txt)
         elif event == Keys.BUTTON_RECORD:
             if model.recording:
                 # not sent to background worker because we want to abort the current action
@@ -478,6 +646,9 @@ def main():
             if selected is not None and len(selected) == 1:
                 selected[0].enabled = values[Keys.CHECKBOX_FILTER_ACTIVE]
                 on_filters_changed(model, True, True)
+        elif event == Keys.CHECKBOX_ALL_FILTER_ACTIVE:
+            model.apply_filters = values[Keys.CHECKBOX_ALL_FILTER_ACTIVE]
+            on_filters_changed(model, False, False)
 
     window.close()
 
