@@ -361,8 +361,23 @@ def save_crop_image(model: Model):
             return
 
 
+def get_last_accessed_image(folder, extensions=('png', 'jpg')):
+    fn = None
+    ft = None
+    if os.path.exists(folder):
+        for f in os.listdir(folder):
+            if extensions and f.split('.')[-1].lower() in extensions:
+                fp = os.path.join(folder, f)
+                t = os.path.getatime(fp)
+                if not ft or ft < t:
+                    ft = t
+                    fn = fp
+    return fn
+
+
 def load_main_image(model: Model):
-    filepath = sg.popup_get_file("Load screenshot file", initial_folder=config.output_dir)
+    filepath = get_last_accessed_image(config.output_dir)
+    filepath = sg.popup_get_file("Load screenshot file", initial_folder=config.output_dir, default_path=filepath)
     if filepath and os.path.exists(filepath):
         im = cv2.imread(filepath)
         model.enqueue_new_screenshot(im)
