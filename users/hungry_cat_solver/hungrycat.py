@@ -324,6 +324,21 @@ class Solver:
                                         g = remove_color(g, index, k, b)
             return g
 
+        # to get rid of wrong recursion solutions faster, at each new line we check it is valid
+        def check_line(g, j):
+            color_counts = [get_cell(g, k, j) for k in range(width)]
+            for b, header_list in enumerate(row_headers):
+                header = header_list[j]
+                if header.value != sum(k[b] for k in color_counts):
+                    return False
+                if header.value > 1:
+                    blocks = find_brush_blocks(g, b, j, True)
+                    if header.circled and len(blocks) != 1:
+                        return False
+                    if not header.circled and len(blocks) == 1:
+                        return False
+            return True
+
         # g is the grid model, r and c are row and col models (contain currently picked colors per row / col)
         # very slow...
         def recur(g, c, r, i, j):
@@ -332,6 +347,9 @@ class Solver:
                 return g
             colors = get_cell(g, i, j)
             next_i, next_j = (i + 1, j) if i + 1 < width else (0, j + 1)
+            if i == 0 and j > 0:
+                if not check_line(g, j - 1):
+                    return None
             if sum(colors) == 0:
                 return None
             else:
