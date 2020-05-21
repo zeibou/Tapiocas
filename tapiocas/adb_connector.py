@@ -173,7 +173,6 @@ class AdbConnector:
         :return:
         """
         self._connect()
-        logger.debug(x1, y1, x2, y2)
         self._shell(f'{CMD_SHELL_SWIPE} {x1:.0f} {y1:.0f} {x2:.0f} {y2:.0f} {time_ms}')
         self.wait(wait_ms)
 
