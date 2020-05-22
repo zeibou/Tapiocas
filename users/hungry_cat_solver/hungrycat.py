@@ -91,7 +91,7 @@ class Header:
         self.ssim_scores = []  # for other possible parsings
 
     def __repr__(self):
-        return  f"{self.value}{' (circled)' if self.circled else ''}"
+        return  f"{'(' if self.circled else ''}{self.value}{')' if self.circled else ''}"
 
 
 class Cell:
@@ -131,12 +131,9 @@ class Solver:
         self.solution = None
         self.solution_by_step = None
 
-    def load_level(self, image):
-        self.col_headers = parse_column_headers(image)
-        self.row_headers = parse_row_headers(image)
-        check_headers(self.col_headers, self.row_headers)
-
-    def solve_level(self):
+    def solve_level(self, col_headers, row_headers):
+        self.col_headers = col_headers
+        self.row_headers = row_headers
         t = time.perf_counter()
         logging.info("Looking for solution")
         self.dfs_solution()
@@ -503,12 +500,6 @@ class Solver:
                 self.connector.swipe(*s.cell_1.screen_pos, *s.cell_2.screen_pos, s.distance * SWIPE_SPEED)
 
 
-def parse_headers(image):
-    column_headers = parse_column_headers(image)
-    row_headers = parse_row_headers(image)
-    return column_headers, row_headers
-
-
 def parse_column_headers(image):
     headers = []
     for j in range(4):
@@ -608,7 +599,7 @@ def check_header(headers, is_row, throw_exception):
         s = sum(b.value for b in block_headers)
         valid_ssims = []
         if GRID_SHAPE[int(is_row)] != s:
-            logging.warning(f"Image parsing error: {'Row' if is_row else 'Column'} Header {i} sums to {s}")
+            logging.warning(f"Image parsing error: {'Row' if not is_row else 'Column'} Header {i} sums to {s}")
             # test all combinations of all values, keep the best scored valid combination
             h1, h2, h3, h4 = block_headers
             for s1 in h1.ssim_scores:
@@ -629,24 +620,58 @@ def check_header(headers, is_row, throw_exception):
     return True
 
 
+def get_level_image(save_image=False, load_image=True):
+    image_level_export_file = '../output/hungry_cat_level.png'
+    if load_image:
+        img = cv2.imread(image_level_export_file)
+    else:
+        img = connector.get_screenshot_opencv(pull=False)
+        if save_image:
+            cv2.imwrite(image_level_export_file, image_level)
+    return img
+
+
+def parse_headers(image):
+    col_headers = parse_column_headers(image)
+    row_headers = parse_row_headers(image)
+    check_headers(col_headers, row_headers)
+
+    # we print in case it's wrong, to be able to load from 'load_headers_from_string'
+    print("COLS", col_headers)
+    print("ROWS", row_headers)
+    return col_headers, row_headers
+
+
+def load_headers_from_string(col_headers, row_header):
+    return load_header_from_string(col_headers, False), load_header_from_string(row_header, True)
+
+
+def load_header_from_string(header, is_row):
+    ret = []
+    for b, h in enumerate(header[2:-2].split('], [')):
+        brush = []
+        ret.append(brush)
+        for c, k in enumerate(h.split(', ')):
+            circled = k[0] == '('
+            i = b if is_row else c
+            j = c if is_row else b
+            v = int(k[1:-1]) if circled else int(k)
+            brush.append(Header(i, j, v, circled, b))
+    return ret
+
+
 if __name__ == "__main__":
     config = config_manager.get_configuration()
     log_manager.initialize_log(config.log_dir, log_level=config.log_level)
     connector = AdbConnector(ip=config.phone_ip, adbkey_path=config.adbkey_path, output_dir=config.output_dir)
-
     load_samples()
-
     solver = Solver(connector)
 
-    # to wrap in a module that switches automatically to new levels
-    image_level = connector.get_screenshot_opencv(pull=False)
-
-    # cv2.imwrite('./hc_debug.png', image_level)
-    # image_level = cv2.imread('./hc_debug.png')
-
-    solver.load_level(image_level)
-    print(solver.col_headers)
-    print(solver.row_headers)
-    solver.solve_level()
+    image_level = get_level_image(save_image=False, load_image=False)
+    ch, rh = parse_headers(image_level)
+    # chs = '[[6, 5, 4, (2), (3), (2), (3), 5, 8, (8)], [0, 1, (2), 1, 0, 0, 3, 2, 1, 2], [4, 3, 4, (7), (7), (4), 0, 0, 0, 0], [5, 6, 5, 5, 5, 9, 9, 8, 6, 5]]'
+    # rhs = '[[0, 0, 1, (2), 4, 5, 4, 5, 5, (6), (6), (3), (2), 1, (2)], [6, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, (3), 2], [(2), (3), (3), (6), 3, (2), (3), (2), (2), (2), 1, 0, 0, 0, 0], [2, 6, 6, (2), (3), (3), (3), (3), (3), (2), 3, 7, (8), 6, (6)]]'
+    # ch, rh = load_headers_from_string(chs, rhs)
+    solver.solve_level(ch, rh)
     # solver.push_solution_cell_by_cell()
     solver.push_solution_line_by_line()
