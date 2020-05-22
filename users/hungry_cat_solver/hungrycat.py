@@ -146,7 +146,6 @@ class Solver:
     # if down to 1 => color picked for that path.
     # if down to 0 => not possible, wrong path.
     # if 2 or more => try all possibilities
-    # also we want to pass along currently used colors in row / col for faster checks
     def dfs_solution(self):
         width = GRID_SHAPE[0]
         height = GRID_SHAPE[1]
@@ -170,35 +169,24 @@ class Solver:
             pos = 4 * (j * width + i)
             return [1 if g & (1 << pos + k) else 0 for k in range(4)]
 
-        def get_c_r(c, r, i, j, b):
-            col_pos = 16 * i + 4 * b
-            row_pos = 16 * j + 4 * b
-            return ((c >> col_pos) & 0b1111), ((r >> row_pos) & 0b1111)
-
-        def set_color(g, c, r, i, j, brush_id):
+        def set_color(g, i, j, brush_id):
             # update cell color
             pos = 4 * (j * width + i)
             g &= ~(0b1111 << pos)  # set all to zero first
             g |= 1 << pos + brush_id
-
-            # update col and row totals:
-            col_pos = 16 * i + 4 * brush_id
-            col_val = ((c >> col_pos) & 0b1111)
-            col_val += 1
-            c &= ~(0b1111 << col_pos)
-            c |= col_val << col_pos
-
-            row_pos = 16 * j + 4 * brush_id
-            row_val = ((r >> row_pos) & 0b1111)
-            row_val += 1
-            r &= ~(0b1111 << row_pos)
-            r |= row_val << row_pos
-            return g, c, r
+            return g
 
         def remove_color(g, i, j, brush_id):
             pos = 4 * (j * width + i)
             g &= ~(1 << pos + brush_id)
             return g
+
+        def max_simplify(g):
+            g2 = simplify_grid(g)
+            while g2 != g:
+                g = g2
+                g2 = simplify_grid(g)
+            return g2
 
         # tries to simplify grid possibilities with a few rules
         # returns None if grid is invalid
@@ -210,6 +198,8 @@ class Solver:
             return g
 
         def try_place_contiguous(g, is_row):
+            if g is None:
+                return None
             _range = height if is_row else width
             _headers = row_headers if is_row else col_headers
             _row_or_col = "row" if is_row else "col"
@@ -225,31 +215,25 @@ class Solver:
                         # if more than one valid block possible, then we also check whether t
                         # he color is 'sure' in one of those blocks, in which case other blocks are invalid
                         if len(valid_blocks) == 0:
-                            return None, None, None
+                            return None
                         if len(valid_blocks) == 1:
                             block = valid_blocks[0]
                             certified = certified_cells_in_block(g, b, index, block, is_row)
                             # we can just certify the middle of the block
-                            if not certified:
-                                block_len = block[1] - block[0] + 1
-                                margin = block_len - header.value
-                                for k in range(block[0] + margin, block[1] - margin + 1):
-                                    if is_row:
-                                        g, _, _ = set_color(g, 0, 0, k, index, b)
-                                    else:
-                                        g, _, _ = set_color(g, 0, 0, index, k, b)
+                            block_len = block[1] - block[0] + 1
+                            margin = block_len - header.value
+                            start_block, end_block = block[0] + margin, block[1] - margin + 1
                             # some part of the block is certified. if it's a side, we know where it ends
-                            else:
-                                start_block, end_block = 0, -1
+                            if certified:
                                 if block[0] in certified:
                                     start_block, end_block = block[0] + 1, block[0] + header.value
                                 elif block[1] in certified:
                                     start_block, end_block = block[1] - header.value + 1, block[1]
-                                for k in range(start_block, end_block):
-                                    if is_row:
-                                        g, _, _ = set_color(g, 0, 0, k, index, b)
-                                    else:
-                                        g, _, _ = set_color(g, 0, 0, index, k, b)
+                            for k in range(start_block, end_block):
+                                if is_row:
+                                    g = set_color(g, k, index, b)
+                                else:
+                                    g = set_color(g, index, k, b)
 
                         elif len(valid_blocks) > 1:
                             only_valid_block = None
@@ -305,6 +289,8 @@ class Solver:
             _range = height if is_row else width
             _headers = row_headers if is_row else col_headers
             for index in range(_range):
+                if g is None:
+                    return None
                 if is_row:
                     color_counts = [get_cell(g, k, index) for k in range(width)]
                 else:
@@ -324,105 +310,63 @@ class Solver:
             return g
 
         # to get rid of wrong recursion solutions faster, at each new line we check it is valid
-        def check_line(g, j):
-            color_counts = [get_cell(g, k, j) for k in range(width)]
-            for b, header_list in enumerate(row_headers):
+        # we check also every column that is fully solved
+        def check_line(g, j, is_row):
+            if is_row:
+                color_counts = [get_cell(g, k, j) for k in range(width)]
+            else:
+                color_counts = [get_cell(g, j, k) for k in range(height)]
+            for b, header_list in enumerate(row_headers if is_row else col_headers):
                 header = header_list[j]
                 if header.value != sum(k[b] for k in color_counts):
                     return False
                 if header.value > 1:
-                    blocks = find_brush_blocks(g, b, j, True)
+                    blocks = find_brush_blocks(g, b, j, is_row)
                     if header.circled and len(blocks) != 1:
                         return False
                     if not header.circled and len(blocks) == 1:
                         return False
             return True
 
+        def get_rows_recur_order():
+            # we sort by headers with highest circled value / lowest possibilities
+            # so that recursive solving is faster
+            scores = []
+            for i in range(height):
+                headers = [row_headers[b][i] for b in range(4) if row_headers[b][i].value > 0]
+                circled = [h.value for h in headers if h.circled]
+                score = 100 * max(circled) if circled else 0 + 10 * (4 - len(headers))
+                scores.append(score)
+
+            return [i for i, k in sorted(enumerate(scores), key=lambda s: -s[1])]
+
         # g is the grid model, r and c are row and col models (contain currently picked colors per row / col)
         # very slow...
-        def recur(g, c, r, i, j):
-            if j * width + i == width * height:
+        def recur(g, i, row_index):
+            if i == 0 and row_index > 0:
+                if not check_line(g, recur_j[row_index - 1], True):
+                    return None
+                # we also try to simplify at every new recursive line, helps checking for invalid paths
+                g = simplify_grid(g)
+                if g is None:
+                    return None
+            if row_index >= height:
+                for i in range(width):
+                    if not check_line(g, i, False):
+                        return None
                 # we cleared the board, g is a solution
                 return g
+            j = recur_j[row_index]
             colors = get_cell(g, i, j)
-            next_i, next_j = (i + 1, j) if i + 1 < width else (0, j + 1)
-            if i == 0 and j > 0:
-                if not check_line(g, j - 1):
-                    return None
+            next_i, next_row_index = (i + 1, row_index) if i + 1 < width else (0, row_index + 1)
             if sum(colors) == 0:
                 return None
             else:
                 # we want to perform checks
                 for b in range(4):
                     if colors[b]:
-                        # possible color, we try that path.
-                        hg = g
-                        cc, rr = get_c_r(c, r, i, j, b)
-
-                        # but we first check that it's not breaking rules
-                        # if header requires number higher than current row / column, no check
-                        # otherwise: checks that (no-)contiguous is respected, and that we did not overflow
-                        # also, if the path is correct, and we've completed row / col, we remove color on next cells
-                        # to prevent trying those wrong paths later on
-                        # special case: header is one: then no check, but still clear path
-                        ch = col_headers[b][i]
-                        col_completed = False
-                        if ch.value == 1:
-                            col_completed = True
-                        elif ch.value <= j + 1:
-                            if cc + 1 > ch.value:
-                                # overflow
-                                continue
-                            elif cc + 1 == ch.value:
-                                col_completed = True
-                                above_farther = sum([get_cell(hg, i, jj)[b] for jj in range(j + 1 - ch.value)])
-                                if ch.circled and above_farther != 0:
-                                    # not contiguous
-                                    continue
-                                if not ch.circled and above_farther == 0:
-                                    # contiguous
-                                    continue
-
-                        breaking_path = False
-                        if col_completed:
-                            for k in range(j + 1, height):
-                                h = remove_color(hg, i, k, b)
-                                breaking_path = not sum(get_cell(h, i, k))
-                                if breaking_path:
-                                    break
-                        if breaking_path:
-                            continue
-
-                        # now same with rows:
-                        rh = row_headers[b][j]
-                        row_completed = False
-                        if rh.value == 1:
-                            row_completed = True
-                        elif rh.value <= i + 1:
-                            if rr + 1 > rh.value:
-                                # overflow
-                                continue
-                            elif rr + 1 == rh.value:
-                                left_farther = sum([get_cell(hg, ii, j)[b] for ii in range(i + 1 - rh.value)])
-                                row_completed = True
-                                if rh.circled and left_farther != 0:
-                                    # not contiguous
-                                    continue
-                                if not rh.circled and left_farther == 0:
-                                    # contiguous
-                                    continue
-
-                        if row_completed:
-                            for k in range(i + 1, width):
-                                h = remove_color(hg, k, j, b)
-                                breaking_path = not sum(get_cell(h, k, j))
-                                if breaking_path:
-                                    break
-                        if breaking_path:
-                            continue
-
-                        hg, hc, hr = set_color(hg, c, r, i, j, b)
-                        s = recur(hg, hc, hr, next_i, next_j)
+                        hg = set_color(g, i, j, b)
+                        s = recur(hg, next_i, next_row_index)
                         if s is not None:
                             return s
 
@@ -475,13 +419,11 @@ class Solver:
             return solution_steps_uniques
 
         grid = init_grid()
-        s_grid = simplify_grid(grid)
-        while s_grid != grid:
-            grid = s_grid
-            s_grid = simplify_grid(grid)
-        s_grid = recur(s_grid, 0, 0, 0, 0)
-        self.solution = grid_to_solution(s_grid)
-        self.solution_by_step = grid_to_solution_by_step(s_grid)
+        grid = max_simplify(grid)
+        recur_j = get_rows_recur_order()
+        grid = recur(grid, 0, 0)
+        self.solution = grid_to_solution(grid)
+        self.solution_by_step = grid_to_solution_by_step(grid)
 
     # slow but works on unfinished solutions as well (for debug or step by step)
     def push_solution_cell_by_cell(self):
