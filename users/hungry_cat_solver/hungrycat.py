@@ -8,14 +8,16 @@ from skimage.metrics import structural_similarity as ssim
 import config_manager
 import log_manager
 from adb_connector import AdbConnector
-from image_filters import CannyFilter, BlurFilter
+from image_filters import CannyFilter, BlurFilter, InvertFilter
 
 
 canny_filter = CannyFilter()
 blur_filter = BlurFilter()
 blur_filter.set_value(5)
+invert_filter = InvertFilter()
 
-MIN_SSIM_SCORE = 0.6
+MIN_SSIM_SCORE = 0.4
+IMVERT_COLORS = False
 
 """
 Works with device screen size: 1080 x 2160
@@ -533,24 +535,55 @@ def parse_row_headers(image):
     return headers
 
 
-def crop_filter(crop):
-    canny = canny_filter.apply(crop)
+def crop_filter(crop, circled):
+    # sometimes inverting colors helps recognizing contours
+    if IMVERT_COLORS:
+        crop = invert_filter.apply(crop)
+    crop = canny_filter.apply(crop)
+    if circled:
+        # remove corners that have the circle contrast
+        remove_circle_corners(crop)
     # we blur the canny image a few times to have thicker borders
-    blur = blur_filter.apply(blur_filter.apply(blur_filter.apply(canny)))
-    gray = cv2.cvtColor(blur, cv2.COLOR_BGR2GRAY)
-    return gray
+    crop = blur_filter.apply(blur_filter.apply(blur_filter.apply(crop)))
+    crop = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+    return crop
+
+
+def remove_circle_corners(crop):
+    k = 8
+    mask_ur = np.tril(np.ones((k, k), dtype=np.uint8), -1)
+    mask_bl = mask_ur.T
+    mask_ul = mask_bl[::-1]
+    mask_br = mask_ur[::-1]
+    crop[:k, :k, 0] *= mask_ul
+    crop[:k, :k, 1] *= mask_ul
+    crop[:k, :k, 2] *= mask_ul
+    crop[:k, -k:, 0] *= mask_ur
+    crop[:k, -k:, 1] *= mask_ur
+    crop[:k, -k:, 2] *= mask_ur
+    crop[-k:, :k, 0] *= mask_bl
+    crop[-k:, :k, 1] *= mask_bl
+    crop[-k:, :k, 2] *= mask_bl
+    crop[-k:, -k:, 0] *= mask_br
+    crop[-k:, -k:, 1] *= mask_br
+    crop[-k:, -k:, 2] *= mask_br
 
 
 def crop_to_header(crop, i, j, brush_id, is_row):
     ci_mask = get_circle_mask(crop)
     circled = np.sum(ci_mask) > 100
     header = Header(i, j, -1, circled, brush_id)
-    filtered = crop_filter(crop)
+    filtered = crop_filter(crop, circled)
 
     # uncomment to generate samples / debug
-    # filepath = os.path.join(config.output_dir, "hungry_cat_crops", f"crop_{'R' if is_row else 'C'}_x{i+1}_y{j+1}.png")
-    # os.makedirs(os.path.dirname(filepath), exist_ok=True)
-    # cv2.imwrite(filepath, filtered)
+    filepath = os.path.join(config.output_dir, "hungry_cat_crops", f"crop_{'R' if is_row else 'C'}_x{i+1}_y{j+1}.png")
+    os.makedirs(os.path.dirname(filepath), exist_ok=True)
+    cv2.imwrite(filepath, filtered)
+
+    # 0 is an easy case, and we want to enforce it with a high score
+    max_intensity = np.max(filtered)
+    if max_intensity == 0:
+        header.ssim_scores.append(SsimScore(100, 0))
 
     for s_id, sample in enumerate(SAMPLES):
         if sample is not None:
