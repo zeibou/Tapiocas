@@ -245,16 +245,16 @@ class AdbConnector:
                 return self._get_screenshot_raw_pull_file_pil()
             return self._get_screenshot_png_pull_file_pil()
         if raw:
-                return self._get_screenshot_raw_stream_pil()
+            return self._get_screenshot_raw_stream_pil()
         return self._get_screenshot_png_stream_pil()
 
-    def get_screenshot_opencv(self, raw=False, pull=True) -> np.ndarray:
+    def get_screenshot_opencv(self, raw=False, pull=False) -> np.ndarray:
         if pull:
             if raw:
                 return self._get_screenshot_raw_pull_file_opencv()
             return self._get_screenshot_png_pull_file_opencv()
         if raw:
-                return self._get_screenshot_raw_stream_opencv()
+            return self._get_screenshot_raw_stream_opencv()
         return self._get_screenshot_png_stream_opencv()
 
     @staticmethod
