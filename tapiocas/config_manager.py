@@ -2,7 +2,7 @@ import os
 import json
 import logging
 
-from constants import DEFAULT_CONFIG_FILE, CUSTOM_CONFIG_FILE
+from constants import DEFAULT_CONFIG_FILE, CUSTOM_CONFIG_FILE, DEFAULT_CONFIG_FOLDER
 
 
 class Configuration:
@@ -36,12 +36,16 @@ class Configuration:
         self._loaded = True
 
 
-def get_configuration(custom_file=CUSTOM_CONFIG_FILE):
+def get_configuration(custom_file=CUSTOM_CONFIG_FILE, config_folder=None):
     config = Configuration()
+    if config_folder is None:
+        config_folder = DEFAULT_CONFIG_FOLDER
     if not config._loaded:
-        logging.info(f"Loading default configuration: {DEFAULT_CONFIG_FILE}")
-        config.load_json(DEFAULT_CONFIG_FILE)
+        default_config_path = os.path.join(config_folder, DEFAULT_CONFIG_FILE)
+        logging.info(f"Loading default configuration: {default_config_path}")
+        config.load_json(default_config_path)
         if custom_file:
+            custom_file = os.path.join(config_folder, custom_file)
             logging.info(f"Loading custom configuration: {custom_file}")
             config.load_json(custom_file, override_only=True)
     if not config.phone_ip:

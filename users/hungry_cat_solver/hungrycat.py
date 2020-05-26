@@ -603,7 +603,7 @@ def load_header_from_string(header, is_row):
 
 
 if __name__ == "__main__":
-    config = config_manager.get_configuration()
+    config = config_manager.get_configuration(config_folder='../../config')
     log_manager.initialize_log(config.log_dir, log_level=config.log_level)
     connector = AdbConnector(ip=config.phone_ip, adbkey_path=config.adbkey_path, output_dir=config.output_dir)
     load_samples()
