@@ -12,6 +12,7 @@ from image_filters import CannyFilter, BlurFilter, InvertFilter
 
 
 canny_filter = CannyFilter()
+canny_filter.set_value(0.5)
 blur_filter = BlurFilter()
 blur_filter.set_value(5)
 invert_filter = InvertFilter()
@@ -516,13 +517,13 @@ def crop_to_header(crop, i, j, brush_id, is_row):
     # 0 is an easy case, and we want to enforce it with a high score
     max_intensity = np.max(filtered)
     if max_intensity == 0:
-        header.ssim_scores.append(SsimScore(100, 0))
-
-    for s_id, sample in enumerate(SAMPLES):
-        if sample is not None:
-            score, _ = ssim(filtered, sample, full=True)
-            if score > MIN_SSIM_SCORE:
-                header.ssim_scores.append(SsimScore(score, s_id))
+        header.ssim_scores.append(SsimScore(0, 0))
+    else:
+        for s_id, sample in enumerate(SAMPLES):
+            if sample is not None:
+                score, _ = ssim(filtered, sample, full=True)
+                if score > MIN_SSIM_SCORE:
+                    header.ssim_scores.append(SsimScore(score, s_id))
 
     if header.ssim_scores:
         header.ssim_scores.sort(key=lambda k: -k.score)
@@ -553,9 +554,9 @@ def check_header(headers, is_row, throw_exception):
                             if s_val == GRID_SHAPE[int(is_row)]:
                                 valid_ssims.append((s_score, s1, s2, s3, s4))
             if valid_ssims:
-                valid_ssims.sort()
+                valid_ssims.sort(key=lambda k: -k[0])
                 h1.value, h2.value, h3.value, h4.value = (s.value for s in valid_ssims[0][1:])
-                return True
+                continue
             elif throw_exception:
                 raise ValueError("Parsing Error")
             return False
