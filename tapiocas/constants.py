@@ -8,5 +8,6 @@ CMD_GET_EVENT = "getevent -lt"
 CMD_WM_SIZE = "wm size"
 
 REMOTE_SCREENSHOT_DIRECTORY = "/sdcard"
-DEFAULT_CONFIG_FILE = "../config/default.json"
-CUSTOM_CONFIG_FILE = "../config/config.json"
+DEFAULT_CONFIG_FOLDER = "../config"
+DEFAULT_CONFIG_FILE = "default.json"
+CUSTOM_CONFIG_FILE = "config.json"

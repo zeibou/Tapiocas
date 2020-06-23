@@ -89,6 +89,7 @@ class Model:
         start_image = np.random.randint(50, 150, (device_screen_size[1], device_screen_size[0], 3), np.uint8)
         self.screenshot_raw = start_image
         self.screenshot_filtered = start_image
+        self.screenshot_filtered_hsv = cv2.cvtColor(start_image, cv2.COLOR_BGR2HSV)
         self.zoom_filtered = None
         self._screenshot_lock = threading.Lock()
         self._screenshot_raw_new = None
@@ -308,9 +309,11 @@ def display_pointer_pos_in_device_coordinates(model: Model):
     pos = get_pointer_pos_in_device_coordinates(model)
     if pos:
         x, y = pos
-        b, g, r = model.screenshot_filtered[y][x]
         model.window[Keys.LABEL_COORD].update(value=f"x={int(x)}  y={int(y)}")
-        model.window[Keys.LABEL_COLOR].update(value=f"R={r}  G={g}  B={b}")
+        b, g, r = model.screenshot_filtered[y][x]
+        h, s, v = model.screenshot_filtered_hsv[y][x]
+        model.window[Keys.LABEL_COLOR].update(value=f"R={r}  G={g}  B={b}"
+                                                    f"\nH={h}  S={s}  V={v}")
     else:
         model.window[Keys.LABEL_COORD].update(value="")
         model.window[Keys.LABEL_COLOR].update(value="")
@@ -318,6 +321,7 @@ def display_pointer_pos_in_device_coordinates(model: Model):
 
 def update_main_image(model: Model):
     model.screenshot_filtered = apply_filters(model, model.screenshot_raw)
+    model.screenshot_filtered_hsv = cv2.cvtColor(model.screenshot_filtered, cv2.COLOR_BGR2HSV)
     img = get_image_thumbnail(model.screenshot_filtered)
 
     if model.zoom_mode:
@@ -361,8 +365,23 @@ def save_crop_image(model: Model):
             return
 
 
+def get_last_accessed_image(folder, extensions=('png', 'jpg')):
+    fn = None
+    ft = None
+    if os.path.exists(folder):
+        for f in os.listdir(folder):
+            if extensions and f.split('.')[-1].lower() in extensions:
+                fp = os.path.join(folder, f)
+                t = os.path.getatime(fp)
+                if not ft or ft < t:
+                    ft = t
+                    fn = fp
+    return fn
+
+
 def load_main_image(model: Model):
-    filepath = sg.popup_get_file("Load screenshot file", initial_folder=config.output_dir)
+    filepath = get_last_accessed_image(config.output_dir)
+    filepath = sg.popup_get_file("Load screenshot file", initial_folder=config.output_dir, default_path=filepath)
     if filepath and os.path.exists(filepath):
         im = cv2.imread(filepath)
         model.enqueue_new_screenshot(im)
@@ -454,7 +473,7 @@ def layout_col_main_image_menu():
 
 def layout_col_main_image(model: Model):
     coord_label_element = sg.Text(size=(20, 1), justification='center', key=Keys.LABEL_COORD)
-    color_label_element = sg.Text(size=(20, 1), justification='center', key=Keys.LABEL_COLOR)
+    color_label_element = sg.Text(size=(20, 2), justification='center', key=Keys.LABEL_COLOR)
     main_image_element = sg.Image(data=get_image_bytes(get_image_thumbnail(model.screenshot_raw)),
                                   enable_events=True,
                                   key=Keys.IMAGE_MAIN)

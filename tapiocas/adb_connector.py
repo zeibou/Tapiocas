@@ -173,7 +173,6 @@ class AdbConnector:
         :return:
         """
         self._connect()
-        logger.debug(x1, y1, x2, y2)
         self._shell(f'{CMD_SHELL_SWIPE} {x1:.0f} {y1:.0f} {x2:.0f} {y2:.0f} {time_ms}')
         self.wait(wait_ms)
 
@@ -246,16 +245,16 @@ class AdbConnector:
                 return self._get_screenshot_raw_pull_file_pil()
             return self._get_screenshot_png_pull_file_pil()
         if raw:
-                return self._get_screenshot_raw_stream_pil()
+            return self._get_screenshot_raw_stream_pil()
         return self._get_screenshot_png_stream_pil()
 
-    def get_screenshot_opencv(self, raw=False, pull=True) -> np.ndarray:
+    def get_screenshot_opencv(self, raw=False, pull=False) -> np.ndarray:
         if pull:
             if raw:
                 return self._get_screenshot_raw_pull_file_opencv()
             return self._get_screenshot_png_pull_file_opencv()
         if raw:
-                return self._get_screenshot_raw_stream_opencv()
+            return self._get_screenshot_raw_stream_opencv()
         return self._get_screenshot_png_stream_opencv()
 
     @staticmethod
