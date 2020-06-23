@@ -9,7 +9,7 @@ import config_manager
 import log_manager
 from adb_connector import AdbConnector
 from image_filters import CannyFilter, BlurFilter, InvertFilter
-
+from hungrycat_coords import *
 
 canny_filter = CannyFilter()
 canny_filter.set_value(0.5)
@@ -35,25 +35,8 @@ BRUSH_3_XY = (710, 2030)
 BRUSH_4_XY = (920, 2030)
 BRUSHES = [BRUSH_1_XY, BRUSH_2_XY, BRUSH_3_XY, BRUSH_4_XY]
 
-# header cells positions (we need precision for better image comparison, and cells are not linearly spaced)
-COLUMN_HEADERS_X = [305, 381, 459, 535, 612, 682, 759, 836, 913, 989]
-COLUMN_HEADERS_Y = [381, 444, 508, 571]
-
-ROW_HEADERS_X = [48, 111, 175, 238]
-ROW_HEADERS_Y = [638, 714, 791, 868, 944, 1015, 1092, 1168, 1246, 1322, 1392, 1469, 1546, 1623, 1700]
-
-HEADER_W = 50
-HEADER_H = 50
-
-# solution cells approx positions:
-GRID_LEFT = 290
-GRID_TOP = 623
-GRID_RIGHT = 1050
-GRID_BOTTOM = 1760
-GRID_SHAPE = (10, 15)  # number of cells per row, per column
-
 # image recognition
-SAMPLES_DIR = './hungry_cat_solver/digits_samples'
+SAMPLES_DIR = './digits_samples'
 SAMPLES = [None] * 16
 
 # milliseconds per cell, too fast may swipe too far
@@ -92,25 +75,26 @@ class Header:
         self.ssim_scores = []  # for other possible parsings
 
     def __repr__(self):
-        return  f"{'(' if self.circled else ''}{self.value}{')' if self.circled else ''}"
+        return f"{'(' if self.circled else ''}{self.value}{')' if self.circled else ''}"
 
 
 class Cell:
-    def __init__(self, i, j, v):
+    def __init__(self, grid: GridShape, i, j, v):
+        self.grid = grid
         self.i = i
         self.j = j
         self.v = v
 
     @property
     def screen_pos(self):
-        cell_w = (GRID_RIGHT - GRID_LEFT) / GRID_SHAPE[0]
-        cell_h = (GRID_BOTTOM - GRID_TOP) / GRID_SHAPE[1]
-        x = int(GRID_LEFT + (self.i + .5) * cell_w)
-        y = int(GRID_TOP + (self.j + .5) * cell_h)
+        cell_w = (self.grid.grid_right - self.grid.grid_left) / self.grid.nb_cols
+        cell_h = (self.grid.grid_bottom - self.grid.grid_top) / self.grid.nb_rows
+        x = int(self.grid.grid_left + (self.i + .5) * cell_w)
+        y = int(self.grid.grid_top + (self.j + .5) * cell_h)
         return x, y
 
     def __repr__(self):
-        return  f"{self.i + 1} => {self.j + 1}"
+        return f"{self.i + 1} => {self.j + 1}"
 
 
 class Step:
@@ -121,18 +105,20 @@ class Step:
         self.distance = abs(cell_1.i - cell_2.i) + abs(cell_1.j - cell_2.j)
 
     def __repr__(self):
-        return  f"Brush #{self.brush_id + 1}: {self.cell_1} => {self.cell_2}"
+        return f"Brush #{self.brush_id + 1}: {self.cell_1} => {self.cell_2}"
 
 
 class Solver:
     def __init__(self, connector: AdbConnector):
         self.connector = connector
+        self.gs = None
         self.row_headers = None
         self.col_headers = None
         self.solution = None
         self.solution_by_step = None
 
-    def solve_level(self, col_headers, row_headers):
+    def solve_level(self, gs: GridShape, col_headers, row_headers):
+        self.gs = gs
         self.col_headers = col_headers
         self.row_headers = row_headers
         t = time.perf_counter()
@@ -148,8 +134,8 @@ class Solver:
     # if down to 0 => not possible, wrong path.
     # if 2 or more => try all possibilities
     def dfs_solution(self):
-        width = GRID_SHAPE[0]
-        height = GRID_SHAPE[1]
+        width = self.gs.nb_cols
+        height = self.gs.nb_rows
         col_headers = self.col_headers
         row_headers = self.row_headers
 
@@ -371,7 +357,7 @@ class Solver:
                         if s is not None:
                             return s
 
-        def grid_to_solution(g):
+        def grid_to_solution(g, grid_shape):
             if not g:
                 raise ValueError("could not find solution")
             solution = []
@@ -383,15 +369,15 @@ class Solver:
                         pass
                         logging.warning(f"Cell [{i}, {j}] not solved. Will not push color on that cell.")
                     else:
-                        solution.append(Cell(i, j, b_ids[0]))
+                        solution.append(Cell(grid_shape, i, j, b_ids[0]))
             return solution
 
-        def grid_to_solution_by_step(g):
+        def grid_to_solution_by_step(g, grid_shape):
             if not g:
                 raise ValueError("could not find solution")
 
             def block_to_step(brush, i1, j1, i2, j2):
-                return Step(Cell(i1, j1, brush), Cell(i2, j2, brush), brush)
+                return Step(Cell(grid_shape, i1, j1, brush), Cell(grid_shape, i2, j2, brush), brush)
 
             solution_steps = []
             for j in range(height):
@@ -407,7 +393,7 @@ class Solver:
 
             # we discard steps that don't add anything
             solution_steps_uniques = []
-            grid = np.ones((15, 10), np.bool)
+            grid = np.ones((grid_shape.nb_rows, grid_shape.nb_cols), np.bool)
             for step in solution_steps:
                 g = grid.copy()
                 for j in range(step.cell_1.j, step.cell_2.j + 1):
@@ -423,8 +409,8 @@ class Solver:
         grid = max_simplify(grid)
         recur_j = get_rows_recur_order()
         grid = recur(grid, 0, 0)
-        self.solution = grid_to_solution(grid)
-        self.solution_by_step = grid_to_solution_by_step(grid)
+        self.solution = grid_to_solution(grid, self.gs)
+        self.solution_by_step = grid_to_solution_by_step(grid, self.gs)
 
     # slow but works on unfinished solutions as well (for debug or step by step)
     def push_solution_cell_by_cell(self):
@@ -443,27 +429,27 @@ class Solver:
                 self.connector.swipe(*s.cell_1.screen_pos, *s.cell_2.screen_pos, s.distance * SWIPE_SPEED)
 
 
-def parse_column_headers(image):
+def parse_column_headers(image, gs: GridShape):
     headers = []
     for j in range(4):
         h_line = []
-        for i in range(GRID_SHAPE[0]):
-            x = COLUMN_HEADERS_X[i]
-            y = COLUMN_HEADERS_Y[j]
-            crop = image[y:y + HEADER_H + 1, x:x + HEADER_W + 1]
+        for i in range(gs.nb_cols):
+            x = gs.column_headers_x[i]
+            y = gs.column_headers_y[j]
+            crop = image[y:y + gs.header_height + 1, x:x + gs.header_width + 1]
             h_line.append(crop_to_header(crop, i, j, j, False))
         headers.append(h_line)
     return headers
 
 
-def parse_row_headers(image):
+def parse_row_headers(image, gs: GridShape):
     headers = []
     for i in range(4):
         v_line = []
-        for j in range(GRID_SHAPE[1]):
-            x = ROW_HEADERS_X[i]
-            y = ROW_HEADERS_Y[j]
-            crop = image[y:y + HEADER_H + 1, x:x + HEADER_W + 1]
+        for j in range(gs.nb_rows):
+            x = gs.row_headers_x[i]
+            y = gs.row_headers_y[j]
+            crop = image[y:y + gs.header_height + 1, x:x + gs.header_width + 1]
             v_line.append(crop_to_header(crop, i, j, i, True))
         headers.append(v_line)
     return headers
@@ -531,17 +517,17 @@ def crop_to_header(crop, i, j, brush_id, is_row):
     return header
 
 
-def check_headers(col_headers, row_headers):
-    check_header(col_headers, True, True)
-    check_header(row_headers, False, True)
+def check_headers(gs: GridShape, col_headers, row_headers):
+    check_header(gs, col_headers, True, True)
+    check_header(gs, row_headers, False, True)
 
 
-def check_header(headers, is_row, throw_exception):
-    for i in range(GRID_SHAPE[1 - int(is_row)]):
+def check_header(gs: GridShape, headers, is_row, throw_exception):
+    for i in range(gs.nb_cols if is_row else gs.nb_rows):
         block_headers = [headers[b][i] for b in range(4)]
         s = sum(b.value for b in block_headers)
-        valid_ssims = []
-        if GRID_SHAPE[int(is_row)] != s:
+        if (gs.nb_rows if is_row else gs.nb_cols) != s:
+            valid_ssims = []
             logging.warning(f"Image parsing error: {'Row' if not is_row else 'Column'} Header {i} sums to {s}")
             # test all combinations of all values, keep the best scored valid combination
             h1, h2, h3, h4 = block_headers
@@ -550,8 +536,8 @@ def check_header(headers, is_row, throw_exception):
                     for s3 in h3.ssim_scores:
                         for s4 in h4.ssim_scores:
                             s_val = s1.value + s2.value + s3.value + s4.value
-                            s_score = s1.score + s2.score + s3.score + s4.score
-                            if s_val == GRID_SHAPE[int(is_row)]:
+                            if s_val == (gs.nb_rows if is_row else gs.nb_cols):
+                                s_score = pow(s1.score, 2) + pow(s2.score, 2) + pow(s3.score, 2) + pow(s4.score, 2)
                                 valid_ssims.append((s_score, s1, s2, s3, s4))
             if valid_ssims:
                 valid_ssims.sort(key=lambda k: -k[0])
@@ -574,14 +560,14 @@ def get_level_image(save_image=False, load_image=True):
     return img
 
 
-def parse_headers(image):
-    col_headers = parse_column_headers(image)
-    row_headers = parse_row_headers(image)
-    check_headers(col_headers, row_headers)
+def parse_headers(image, gs: GridShape):
+    col_headers = parse_column_headers(image, gs)
+    row_headers = parse_row_headers(image, gs)
+    check_headers(gs, col_headers, row_headers)
 
     # we print in case it's wrong, to be able to load from 'load_headers_from_string'
-    print("COLS", col_headers)
-    print("ROWS", row_headers)
+    print(f"chs = '{col_headers}'")
+    print(f"rhs = '{row_headers}'")
     return col_headers, row_headers
 
 
@@ -605,16 +591,22 @@ def load_header_from_string(header, is_row):
 
 if __name__ == "__main__":
     config = config_manager.get_configuration(config_folder='../../config')
+    config.output_dir = '../../output'
+    config.log_dir = '../../log'
     log_manager.initialize_log(config.log_dir, log_level=config.log_level)
     connector = AdbConnector(ip=config.phone_ip, adbkey_path=config.adbkey_path, output_dir=config.output_dir)
     load_samples()
     solver = Solver(connector)
 
     image_level = get_level_image(save_image=False, load_image=False)
-    ch, rh = parse_headers(image_level)
-    # chs = '[[6, 5, 4, (2), (3), (2), (3), 5, 8, (8)], [0, 1, (2), 1, 0, 0, 3, 2, 1, 2], [4, 3, 4, (7), (7), (4), 0, 0, 0, 0], [5, 6, 5, 5, 5, 9, 9, 8, 6, 5]]'
-    # rhs = '[[0, 0, 1, (2), 4, 5, 4, 5, 5, (6), (6), (3), (2), 1, (2)], [6, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, (3), 2], [(2), (3), (3), (6), 3, (2), (3), (2), (2), (2), 1, 0, 0, 0, 0], [2, 6, 6, (2), (3), (3), (3), (3), (3), (2), 3, 7, (8), 6, (6)]]'
-    # ch, rh = load_headers_from_string(chs, rhs)
-    solver.solve_level(ch, rh)
+    shape = Grid10By10b2()
+    manual = False
+    if manual:
+        chs = '[[10, 8, 7, 7, 6, 5, 3, 7, 6, 5], [1, 2, 3, 2, 2, 4, 4, 3, 4, 6], [3, 4, 4, 5, 4, 2, 3, 2, 2, 1], [1, 1, 1, 1, 3, 4, 5, 3, 3, 3]]'
+        rhs = '[[(3), (10), (3), (3), (4), 1, (3), (6), 5, (10), (6), 3, (3), 4, 0], [0, 0, 0, 0, 0, (3), 0, (4), 5, 0, 0, 1, 2, 6, (10)], [0, 0, (3), (5), 0, 0, (7), 0, 0, 0, (4), (6), 5, 0, 0], [(7), 0, (4), (2), (6), (6), 0, 0, 0, 0, 0, 0, 0, 0, 0]]'
+        ch, rh = load_headers_from_string(chs, rhs)
+    else:
+        ch, rh = parse_headers(image_level, shape)
+    solver.solve_level(shape, ch, rh)
     # solver.push_solution_cell_by_cell()
     solver.push_solution_line_by_line()
